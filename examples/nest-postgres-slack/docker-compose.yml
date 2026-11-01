@@ -1,0 +1,18 @@
+name: flow-nest-postgres-slack
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: flow
+      POSTGRES_PASSWORD: flow
+      POSTGRES_DB: flow_test
+    ports:
+      - "5440:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flow -d flow_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
