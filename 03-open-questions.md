@@ -1,0 +1,29 @@
+# Open questions
+
+Each one has a recommendation. Move it to "Decided" once agreed. Numbers are IDs and are not reused.
+
+8. **Name / relationship with TWD.** Deferred: no need to decide now.
+
+9. **Behaviour diff against base: parked, not part of the MVP.** When it comes back: v1 stores nothing. The PR job records the merge-base with its own tests and then the head, and the two runs are diffed line by line. No committed snapshot files.
+
+## To verify in the spike
+
+Spike 1 (apogee-bot) results: [06-spike-apogee.md](06-spike-apogee.md).
+
+- ✔ OTel patching works inside Vitest's transform (ESM MikroORM → CJS `pg`). Jest still to check.
+- ✔ with a fix: msw-mocked `fetch` produces no spans until `fetch` is wrapped on top of msw. nock still to check (spike 2).
+- ✔ two runs give byte-identical recordings (after normalizing ephemeral ports).
+- ☐ detached work stays in the request's trace (a handler that replies 202 and keeps working).
+- ☐ `register` coexists with an app that already starts its own OTel SDK.
+- ☐ spans can be attributed to the test line that caused them. If not, the annotated test drops to given/when/then level, which span position already gives.
+
+## Decided
+
+1. **Main deliverable (MVP)**: the recording of the tests the PR added or modified, as a comment plus the player. No diff. Same as TWD: an extra pair of eyes on the journey, easy to explain. The diff is parked as Q9.
+2. **Noise budget**: zero-touch by default, and `flow.given/when/then/span` are optional chapters. The facts come from OTel, so the recording is complete without them, and the tool doesn't depend on the dev's discipline.
+3. **DB view**: statements from db spans, with writes highlighted and reads collapsed. A row-level diff per engine comes later. Reads stay visible (collapsed) because they explain why a branch was taken, for example the limit sum.
+4. **Lanes**: one per peer, automatic from span attributes, and an unnamed peer shows as its host. An optional `peers` map names lanes. Zero setup by default, and better names for anyone who bothers.
+5. **Reader**: the PR reviewer. Every output decision is judged by "does the reviewer get it in seconds". Docs and agents may reuse the report later, but they don't drive the design.
+6. **Source of facts**: OpenTelemetry auto-instrumentation, and we are the renderer for the reviewer. The OTel community already maintains per-library capture (pg, mongo, Kafka, Service Bus, …), and it is the standard. Per-library adapters, decorators and AST transforms were rejected.
+7. **Detached work**: the recording waits until no span is left open, and spans that end after the test finishes are flagged `⚠ after test end`. Detached work isn't lost, and a racy test becomes visible.
+10. **Player hosting**: comment first, player later. In the MVP the comment is complete on its own, and the player is the local `.flow/report/index.html` plus a CI artifact. A hosted page per PR comes later.
