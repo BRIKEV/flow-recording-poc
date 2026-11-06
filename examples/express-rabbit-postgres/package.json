@@ -1,0 +1,36 @@
+{
+  "name": "example-express-rabbit-postgres",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "infra:up": "docker compose up -d --wait",
+    "start": "tsx --import ./src/instrumentation.ts src/main.ts",
+    "test": "vitest run",
+    "record": "FLOW_RECORD=1 vitest run",
+    "story": "flow-recording .flow/recordings"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.83.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
+    "@opentelemetry/sdk-node": "^0.301.0",
+    "@opentelemetry/sdk-trace": "^3.1.0",
+    "amqplib": "^2.2.1",
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.8",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.1",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.0.0",
+    "flow-recording": "*",
+    "supertest": "^7.2.2",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

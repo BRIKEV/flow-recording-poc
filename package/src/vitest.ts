@@ -15,7 +15,7 @@ import { getFn, setFn } from '@vitest/runner';
 import { join } from 'node:path';
 import { context, trace, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
-import { enabled, exporter, nextStartOrder, startOrder } from './index';
+import { enabled, endOrder, exporter, nextStartOrder, startOrder } from './index';
 
 // Goes through the app's tracer provider: our spans live in the same trace as theirs
 const tracer = trace.getTracer('flow-recording');
@@ -162,6 +162,7 @@ const toJson = (s: ReadableSpan) => ({
   traceId: s.spanContext().traceId,
   parentSpanId: s.parentSpanContext?.spanId,
   order: startOrder(s),
+  endOrder: endOrder(s),
   startTime: s.startTime,
   endTime: s.endTime,
   attributes: {

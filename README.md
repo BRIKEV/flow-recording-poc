@@ -12,8 +12,10 @@ This repo holds:
 | Example | Stack | Flows it records |
 |---|---|---|
 | [nest-postgres-slack](examples/nest-postgres-slack/) | NestJS 12, Express, MikroORM 7 → `pg`, Postgres, Slack API (`fetch`, mocked with msw), Vitest | `POST /notes` → Slack `users.info` → db insert → Slack `chat.postMessage` · `POST /notes` with an unknown user → Slack → 404, nothing stored · `GET /notes` → db select · CRUD on `/notes/:id`: get (or 404), update, delete |
+| [express-rabbit-postgres](examples/express-rabbit-postgres/) | Express 5, `pg` (no ORM), Postgres, RabbitMQ (`amqplib`), Vitest | `POST /orders` → db insert → publish `order.created` · `payment.received` consumed from a queue → db update + insert · the same work through a payment webhook |
+| [express-bff-third-party](examples/express-bff-third-party/) | Express 5, axios, two third-party APIs mocked with nock, Vitest | `GET /products/:id` → catalog + pricing in parallel → one view · catalog 404 · pricing down |
 
-Next candidates: a queue (RabbitMQ), Redis, nock instead of msw, detached work after a 202, Jest instead of Vitest.
+Next candidates: Redis, detached work after a 202, Jest instead of Vitest.
 
 ## How it works
 
@@ -34,7 +36,7 @@ Requires Node 24 and Docker.
 ```bash
 npm install          # at the root: installs the package and every example (workspaces)
 cd examples/nest-postgres-slack
-npm run db:up        # Postgres on port 5440
+npm run db:up        # Postgres on port 5440 (express-rabbit-postgres: npm run infra:up)
 npm test             # plain test run, nothing recorded
 npm run record       # same tests, writes .flow/recordings/<test>.json
 npm run story        # writes <test>.raw.txt and <test>.story.txt, prints the stories

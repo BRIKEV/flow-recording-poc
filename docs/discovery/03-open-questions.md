@@ -11,7 +11,10 @@ Each one has a recommendation. Move it to "Decided" once agreed. Numbers are IDs
 Spike 1 (apogee-bot) results: [06-spike-apogee.md](06-spike-apogee.md).
 
 - ✔ OTel patching works inside Vitest's transform (ESM MikroORM → CJS `pg`). Jest still to check.
-- ✔ with a fix: msw-mocked `fetch` produces no spans until `fetch` is wrapped on top of msw. nock still to check (spike 2).
+- ✔ with a fix: msw-mocked `fetch` produces no spans until `fetch` is wrapped on top of msw.
+- ✔ nock-mocked `http` calls (axios) are seen by the http instrumentation with no seam (`examples/express-bff-third-party`). Bodies come from our `http.ClientRequest` seam.
+- ✔ RabbitMQ (`examples/express-rabbit-postgres`): publish → consume is one trace, because amqplib's instrumentation propagates context in the message headers. Message bodies and `pg` query values need options of the user's own instrumentation (`publishHook`/`consumeHook`, `enhancedDatabaseReporting`), only while recording. Open: ship those as a documented snippet, or accept them as the one place we touch the user's instrumentation config.
+- ✔ parallel calls (`Promise.all`) are shown as parallel: the processor numbers span ends with the same counter as starts, so "B started before A ended" is exact and stable.
 - ✔ two runs give byte-identical raw traces and stories. Span start times come from `Date.now()` (millisecond precision), so ordering by them made spans started in the same millisecond swap (`dns.lookup`/`tcp.connect`, even `commit`/`chat.postMessage`). Our processor now numbers spans in `onStart`, and siblings are ordered by that start order.
 - ☐ detached work stays in the request's trace (a handler that replies 202 and keeps working).
 - ✔ we join the app's own SDK: one line adds our processor to its `spanProcessors` (`examples/nest-postgres-slack`). Open: a zero-touch OTLP receiver instead, and `sdk.start()` re-running per test file under Vitest/Jest isolation.

@@ -187,6 +187,26 @@ function sqlText(q) {
   return q;
 }
 
+// Bound parameters ($1, $2…) replaced by their values when the instrumentation records
+// them: db.query.parameter.<n> (stable semconv) or db.postgresql.values (pg's
+// enhancedDatabaseReporting).
+function withValues(q, a) {
+  const values = a['db.postgresql.values'] ?? Object.keys(a).filter((k) => k.startsWith('db.query.parameter.'))
+    .sort((x, y) => Number(x.split('.').pop()) - Number(y.split('.').pop())).map((k) => a[k]);
+  if (!Array.isArray(values) || !values.length) return q;
+  const sqlLiteral = (v) => (v === null ? 'null' : /^-?\d+(\.\d+)?$/.test(String(v)) ? String(v) : `'${String(v).replace(/'/g, "''")}'`);
+  return q.replace(/\$(\d+)/g, (m, n) => (values[n - 1] === undefined ? m : sqlLiteral(values[n - 1])));
+}
+
+// What a message is about: the destination, and for RabbitMQ the routing key (usually
+// the event name). Old and stable semconv names.
+function message(a, fallback) {
+  const destination = a['messaging.destination.name'] ?? a['messaging.destination'];
+  const key = a['messaging.rabbitmq.destination.routing_key'] ?? a['messaging.rabbitmq.routing_key'];
+  if (key && destination) return { key, destination };
+  return { key: destination ?? fallback };
+}
+
 // What a span says: { type, peer, text, result }. `inherited` carries the bodies of a
 // flattened test client call to the server span it reached.
 function describeSpan(s, inherited = {}) {
@@ -197,16 +217,18 @@ function describeSpan(s, inherited = {}) {
   const method = a['http.request.method'] ?? a['http.method'];
   const body = payload(a['flow.request.body'] ?? inherited.request);
   const withBody = (t) => `${t}${body ? ` ${body}` : ''}`;
-  if (isDb(s) && sql(s)) return { type: 'call', peer: 'db', text: cut(sqlText(sql(s)), 120), result: '' };
+  if (isDb(s) && sql(s)) return { type: 'call', peer: 'db', text: cut(sqlText(withValues(sql(s), a)), 120), result: '' };
   if (s.kind === SERVER) {
     const route = a['http.route'] ?? a['url.path'] ?? a['http.target'];
     return { type: 'enter', text: withBody(method ? `${method} ${route}` : s.name), result };
   }
   if (s.kind === CONSUMER) {
-    return { type: 'consume', peer: a['messaging.system'] ?? 'queue', text: withBody(`consume ${a['messaging.destination.name'] ?? s.name}`), result: '' };
+    const m = message(a, s.name);
+    return { type: 'consume', peer: a['messaging.system'] ?? 'queue', text: withBody(`consume ${m.key}`), result: '' };
   }
   if (s.kind === PRODUCER) {
-    return { type: 'publish', peer: a['messaging.system'] ?? 'queue', text: withBody(`publish ${a['messaging.destination.name'] ?? s.name}`), result: '' };
+    const m = message(a, s.name);
+    return { type: 'publish', peer: a['messaging.system'] ?? 'queue', text: withBody(`publish ${m.key}${m.destination ? ` to ${m.destination}` : ''}`), result: '' };
   }
   if (s.kind === CLIENT) {
     const url = a['url.full'] ?? a['http.url'];
@@ -249,37 +271,66 @@ function story(spans, config) {
   const lines = []; // { indent, head, text }
   const say = (indent, from, arrow, to, text) => lines.push({ indent, head: [from, arrow, to], text });
 
-  const walk = (s, actor, indent, inherited) => {
-    for (const k of kids(s)) {
+  // Kept children of a span; a flattened span is replaced by its own kept children. A
+  // flattened test client call hands its bodies to the server span it reached.
+  const visible = (s, inherited) =>
+    kids(s).flatMap((k) => {
       const action = decide(k, kids(k), config);
-      if (action === 'hide') continue;
-      if (action === 'flatten') {
-        // A flattened test client call hands its bodies to the server span it reached
-        const bodies = { request: k.attributes['flow.request.body'], response: k.attributes['flow.response.body'] };
-        walk(k, actor, indent, k.kind === CLIENT ? bodies : undefined);
-        continue;
+      if (action === 'hide') return [];
+      if (action === 'show') return [{ span: k, d: describeSpan(k, inherited) }];
+      const bodies = { request: k.attributes['flow.request.body'], response: k.attributes['flow.response.body'] };
+      return visible(k, k.kind === CLIENT ? bodies : undefined);
+    });
+
+  // A call with nothing under it, the kind that can be shown as one of a parallel group
+  const leafCall = (item) => item.d.type === 'call' && !visible(item.span).length;
+
+  const one = ({ span: k, d }, actor, indent) => {
+    // Lines inside start under the receiving actor's name
+    const inner = indent + actor.length + 3;
+    if (d.type === 'enter' || (d.type === 'step' && actor !== sut)) {
+      say(indent, actor, '→', sut, d.text);
+      walk(k, sut, inner);
+      if (d.result) say(indent, actor, '←', sut, d.result);
+    } else if (d.type === 'consume') {
+      say(indent, name(d.peer), '⇢', sut, d.text);
+      walk(k, sut, indent + name(d.peer).length + 3);
+    } else if (d.type === 'publish') {
+      say(indent, actor, '⇢', name(d.peer), d.text);
+      walk(k, actor, inner);
+    } else if (d.type === 'call') {
+      say(indent, actor, '→', name(d.peer), d.text);
+      walk(k, actor, inner);
+      if (d.result) say(indent, actor, '←', name(d.peer), d.result);
+    } else {
+      say(indent, actor, '', '', d.text); // a step of the app
+      walk(k, actor, inner);
+    }
+  };
+
+  // Calls that ran in parallel (each started before an earlier one ended): all the
+  // requests, bracketed, then the answers in the order the calls started.
+  const parallel = (group, actor, indent) => {
+    const width = Math.max(...group.map((g) => g.d.text.length));
+    group.forEach((g, i) => {
+      const mark = i === 0 ? '┐ in parallel' : i === group.length - 1 ? '┘' : '│';
+      say(indent, actor, '→', name(g.d.peer), `${g.d.text.padEnd(width)}  ${mark}`);
+    });
+    for (const g of group) if (g.d.result) say(indent, actor, '←', name(g.d.peer), g.d.result);
+  };
+
+  const walk = (s, actor, indent, inherited) => {
+    const items = visible(s, inherited);
+    for (let i = 0; i < items.length; ) {
+      let j = i + 1;
+      let end = items[i].span.endOrder;
+      while (leafCall(items[i]) && j < items.length && leafCall(items[j]) && items[j].span.order < end) {
+        end = Math.max(end, items[j].span.endOrder);
+        j++;
       }
-      const d = describeSpan(k, inherited);
-      // Lines inside start under the receiving actor's name
-      const inner = indent + actor.length + 3;
-      if (d.type === 'enter' || (d.type === 'step' && actor !== sut)) {
-        say(indent, actor, '→', sut, d.text);
-        walk(k, sut, inner, undefined);
-        if (d.result) say(indent, actor, '←', sut, d.result);
-      } else if (d.type === 'consume') {
-        say(indent, name(d.peer), '⇢', sut, d.text);
-        walk(k, sut, indent + name(d.peer).length + 3, undefined);
-      } else if (d.type === 'publish') {
-        say(indent, actor, '⇢', name(d.peer), d.text);
-        walk(k, actor, inner, undefined);
-      } else if (d.type === 'call') {
-        say(indent, actor, '→', name(d.peer), d.text);
-        walk(k, actor, inner, undefined);
-        if (d.result) say(indent, actor, '←', name(d.peer), d.result);
-      } else {
-        say(indent, actor, '', '', d.text); // a step of the app
-        walk(k, actor, inner, undefined);
-      }
+      if (j - i > 1) parallel(items.slice(i, j), actor, indent);
+      else one(items[i], actor, indent);
+      i = j;
     }
   };
   walk(root, 'test', 2, undefined);
