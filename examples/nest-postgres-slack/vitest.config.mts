@@ -6,7 +6,8 @@ export default defineConfig({
     include: ['test/**/*.e2e-spec.ts'],
     fileParallelism: false,
     globalSetup: ['test/support/global-setup.ts'],
-    // flow-recording first, so the instrumentations patch modules before the app loads them
-    setupFiles: ['test/support/flow-recording.ts', 'test/support/setup.ts'],
+    // The app's own instrumentation first, so it patches modules before the app loads them.
+    // flow-recording/vitest only collects what that instrumentation produces.
+    setupFiles: ['src/instrumentation.ts', 'flow-recording/vitest.ts', 'test/support/setup.ts'],
   },
 });

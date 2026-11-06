@@ -8,6 +8,11 @@ The smallest backend with the three boundaries of the apogee-bot spike: an HTTP 
 | `POST /notes` (unknown user) | Slack `users.info` → 404. Nothing is stored or posted |
 | `GET /notes` | db select → 200 |
 
+What is what:
+- `src/`: the app. `src/instrumentation.ts` is its own OTel setup (NodeSDK + auto-instrumentations), with one line for flow recording.
+- `test/`: its tests and test support. They know nothing about recording.
+- `flow-recording/`: what would become the package. It collects spans and writes recordings; it instruments nothing.
+
 Why this stack: MikroORM 7 is ESM and loads `pg` (CJS), which was the riskiest case for OTel patching inside Vitest. The Slack client uses plain `fetch`, mocked with msw, which is the case that needs the `fetch` seam.
 
 ```bash

@@ -6,7 +6,7 @@
   },
   "scripts": {
     "db:up": "docker compose up -d --wait",
-    "start": "tsx src/main.ts",
+    "start": "tsx --import ./src/instrumentation.ts src/main.ts",
     "test": "vitest run",
     "record": "FLOW_RECORD=1 vitest run"
   },
@@ -17,19 +17,16 @@
     "@nestjs/common": "^12.0.3",
     "@nestjs/core": "^12.0.3",
     "@nestjs/platform-express": "^12.0.3",
+    "@opentelemetry/auto-instrumentations-node": "^0.83.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
+    "@opentelemetry/sdk-node": "^0.301.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@nestjs/testing": "^12.0.3",
-    "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/instrumentation": "^0.223.0",
-    "@opentelemetry/instrumentation-express": "^0.71.1",
-    "@opentelemetry/instrumentation-http": "^0.223.0",
-    "@opentelemetry/instrumentation-pg": "^0.76.0",
-    "@opentelemetry/instrumentation-undici": "^0.33.0",
+    "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/sdk-trace-base": "^2.12.0",
-    "@opentelemetry/sdk-trace-node": "^2.12.0",
     "@types/node": "^24.19.1",
     "@types/supertest": "^7.0.0",
     "msw": "^2.15.0",

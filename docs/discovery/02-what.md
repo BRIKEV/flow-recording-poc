@@ -20,7 +20,7 @@ Lanes: **actor / SUT / one per peer**. A peer comes from span attributes (`serve
 ### Principles
 
 1. **Facts are captured; words are optional.** Every fact comes from a span. The author's words exist only as optional chapters, and a chapter wraps code that actually runs.
-2. **We are the connector, not the instrumenter.** We write no per-library capture code; that is the OTel community's job. We only instrument **platform and mock seams** (`fetch` under msw, probably nock's `http`), never libraries. Spike 1 showed that msw-mocked calls are otherwise invisible.
+2. **We are the connector, not the instrumenter. Bring your own OTel.** The app's own instrumentation decides what is captured; we add a span processor and a span per test. We write no per-library capture code; that is the OTel community's job. We only instrument **platform and mock seams** (`fetch` under msw, probably nock's `http`), never libraries. Spike 1 showed that msw-mocked calls are otherwise invisible.
 3. **Built for review attention.** The reviewer decides in 5 seconds, reads in 30 seconds, and digs in only if something looks off. Every output serves one of those three levels (see [05-outputs.md](05-outputs.md)).
 4. **Highlight writes, collapse reads.** v1 shows DB statements, with writes highlighted and reads collapsed. A row-level state diff (per DB engine, not per library) comes later.
 5. **Deterministic, no AI.** Same code + same tests → the same comment, byte for byte. Everything is execution, normalization and plain diff/set algorithms.
@@ -43,7 +43,7 @@ MVP: **record, don't diff.** As in TWD, the recording is an extra pair of eyes o
 
 Same delivery as TWD: a PR label, then CI runs the tests with recording on, then the comment. The report is CI output (gitignored, like `.twd/report/`). Nothing is committed to the repo.
 
-**What a team needs:** one devDependency and one `setupFiles` line. The app does **not** need OTel. `register` brings the SDK and the instrumentations in for the test run only.
+**What a team needs:** two lines. Our processor goes into the app's own OTel setup, and that setup is loaded in the tests too (see [04-api.md](04-api.md)). A team without OTel gets a preset with the standard auto-instrumentations.
 
 **Later: the behaviour diff against base.** Record the merge-base too and diff the two runs line by line ("now also calls X, no longer writes Y"). It is powerful, but harder to explain, so it isn't in the MVP. The determinism rules above keep that door open.
 

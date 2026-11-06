@@ -1,39 +1,20 @@
-// POC recorder, taken from the apogee-bot spike. Off unless FLOW_RECORD=1.
-// Writes one raw span tree (.txt) and the spans (.json) per test into .flow/recordings/.
+// Runner integration (would be `flow-recording/vitest`). Loaded as a setupFile after the
+// app's instrumentation. It opens one span per test, adds the test-only fetch seam, and
+// writes one recording per test into .flow/recordings/.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { context, trace, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
-import { registerInstrumentations } from '@opentelemetry/instrumentation';
-import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express';
-import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
-import { PgInstrumentation } from '@opentelemetry/instrumentation-pg';
-import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
-import { InMemorySpanExporter, SimpleSpanProcessor, type ReadableSpan } from '@opentelemetry/sdk-trace-base';
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { enabled, exporter } from './index';
 
-const enabled = process.env.FLOW_RECORD === '1';
-const exporter = new InMemorySpanExporter();
-
-if (enabled) {
-  const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-  provider.register();
-  registerInstrumentations({
-    instrumentations: [
-      new HttpInstrumentation(),
-      new UndiciInstrumentation(),
-      new PgInstrumentation({ enhancedDatabaseReporting: true }),
-      new ExpressInstrumentation(),
-    ],
-  });
-}
-
+// Goes through the app's tracer provider: our spans live in the same trace as theirs
 const tracer = trace.getTracer('flow-recording');
 const outDir = join(process.cwd(), '.flow', 'recordings');
 let testSpan: ReturnType<typeof tracer.startSpan> | undefined;
 
-// msw replaces globalThis.fetch, so undici's diagnostics channel never fires for mocked
+// msw replaces globalThis.fetch, so the app's undici instrumentation never sees mocked
 // requests. Wrap whatever fetch is installed (msw's, once the test file's beforeAll has
-// called listen()) with a client span. A platform seam, not a library adapter.
+// called listen()) with a client span. A test-only seam: production fetch is untouched.
 function wrapFetch() {
   const current = globalThis.fetch as typeof fetch & { __flowWrapped?: boolean };
   if (current.__flowWrapped) return;
@@ -79,7 +60,7 @@ afterEach((ctx) => {
   writeFileSync(join(outDir, `${file}.json`), JSON.stringify(spans.map(toJson), null, 2));
 });
 
-// The unfiltered tree: what OTel gives us before any curation
+// The unfiltered tree: what the app's instrumentation gives us before any curation
 function renderRaw(spans: ReadableSpan[]): string {
   const ids = new Set(spans.map((s) => s.spanContext().spanId));
   const children = new Map<string | undefined, ReadableSpan[]>();

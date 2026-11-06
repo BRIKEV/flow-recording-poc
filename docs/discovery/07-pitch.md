@@ -16,18 +16,24 @@ On the frontend we already solved this with TWD recording: label the PR, CI runs
 
 - Capture is a solved, standard problem: the OTel auto-instrumentations (pg, mongo, redis, kafka, amqp, http, express…), maintained by the community. We build **no adapters**.
 - What's missing is the **connector**: test trace → something a human reads in 10 seconds in the PR.
-- The app doesn't need OTel. It is loaded **only in the test run**, as a devDependency.
+- **Bring your own OTel.** We use the app's own instrumentation, so the recording shows exactly what the app emits, including its custom spans. We only add a span processor and a span per test. Teams without OTel get a preset.
 - Deterministic, no AI: same code + same tests → the same recording.
 
-What a team does: one line.
+What a team does: two lines.
 
 ```diff
+  // src/instrumentation.ts (the app's)
+  spanProcessors: [
+    new BatchSpanProcessor(new OTLPTraceExporter()),
++   ...flowRecording.processors(),      // empty unless FLOW_RECORD=1
+  ],
+
   // vitest.config.ts
 - setupFiles: ['./test/setup.ts'],
-+ setupFiles: ['flow-recording/register', './test/setup.ts'],
++ setupFiles: ['./src/instrumentation.ts', 'flow-recording/vitest', './test/setup.ts'],
 ```
 
-The tests stay **untouched**.
+The tests stay **untouched**. Working example: `examples/nest-postgres-slack`.
 
 ## The POC: it works
 
@@ -65,7 +71,7 @@ Later, and this is the part no video can do: record `main` too and **diff the be
 
 ## Where you come in: the OTel questions I can't answer well
 
-1. **Owning the SDK inside a test runner.** One provider per worker, Vitest/Jest isolation, and coexisting with an app that already starts its own SDK. What's the right shape for `register`?
+1. **Joining the app's SDK.** Today it takes one line in the app's `instrumentation.ts`, because SDK 2.x has no `addSpanProcessor`. Is an in-process OTLP receiver (zero touch, via `OTEL_EXPORTER_OTLP_ENDPOINT`) worth the batching and flush cost? And what about Vitest/Jest isolation re-running `sdk.start()` per test file?
 2. **Mock seams.** I wrapped `fetch` to see msw calls. Is there a cleaner OTel-native route (undici diagnostics channel, a span processor, msw/interceptors events)? And nock, which patches `http`, against the http instrumentation?
 3. **"When is the trace done?"** Detached work after a 202 should stay in the recording. Tracking open spans in a SpanProcessor? Context propagation through queues and timers?
 4. **Noise vs signal.** About 45 spans per test → 15 lines in the story. Which semconv attributes can we rely on across instrumentation versions (`db.query.text` vs `db.statement`, the stable-semconv migration)? Is filtering per instrumentation the right axis?
@@ -83,6 +89,6 @@ Later, and this is the part no video can do: record `main` too and **diff the be
 
 1. Spike 2 on a noisier service: Express + nock + detached work after a 202 + Jest. Is the idea still real there?
 2. Prototype the renderer: story view + Mermaid + PR comment, on the apogee recordings.
-3. Decide together what `register` owns and what stays standard OTel.
+3. Decide together how we join the app's SDK: one line in its file, or an OTLP receiver.
 
 The full notes are in this folder: [01-why](01-why.md) · [02-what](02-what.md) · [03-open-questions](03-open-questions.md) · [04-api](04-api.md) · [05-outputs](05-outputs.md) · [06-spike-apogee](06-spike-apogee.md).

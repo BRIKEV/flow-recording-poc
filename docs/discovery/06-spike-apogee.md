@@ -45,6 +45,15 @@ rejects every positive transaction of a message that would exceed the giving lim
 - **Setup hooks pollute the test.** `setup.ts`'s `truncate` in `beforeEach` shows up in the test's trace. Hooks need to be separated from the test body.
 - **SQL text, not params.** MikroORM inlines values, so `db.postgresql.values` is empty and the values are in the statement text. Long `INSERT` column lists need summarizing (table + key values).
 
+## Follow-up: bring your own OTel (`examples/nest-postgres-slack`)
+
+The spike created its own instrumentation. The example now uses the app's own setup instead: `src/instrumentation.ts` with `NodeSDK` + `getNodeAutoInstrumentations()`, loaded first in `setupFiles`. Flow recording only adds `...flowRecording.processors()` to its `spanProcessors`, plus `flow-recording/vitest` for the span per test and the `fetch` seam.
+
+- ✔ Same story as with our own hand-picked instrumentations. The renderer didn't need a change.
+- The full auto-instrumentations bring more noise: `dns.lookup`, `tcp.connect`, and the middleware spans now come from `instrumentation-router`. About 30 raw spans for a 4-line story.
+- ✘ The raw trace is no longer deterministic: concurrent `dns.lookup` and `tcp.connect` swap order between runs. The story is stable because it doesn't show them.
+- One line in the app's file is needed, because OTel SDK 2.x has no `addSpanProcessor`.
+
 ## Not verified yet
 
 - nock, detached work after a 202, Jest instead of Vitest, an app that already starts its own OTel SDK, and attributing spans to a test line.

@@ -1,19 +1,39 @@
 # API and usage
 
-Contract, not implementation. Works in Jest and Vitest with no custom runner. The default costs **one line per repo and nothing per test**.
+Contract, not implementation. Works in Jest and Vitest with no custom runner. The default costs **two lines per repo and nothing per test**.
 
-## 1. Setup: one line per repo
+**Bring your own OTel.** The app's own instrumentation decides what is captured. We only collect what it already produces, per test, and render it. Working example: [`examples/nest-postgres-slack`](../../examples/nest-postgres-slack/).
+
+## 1. Setup: two lines per repo
+
+The app already has its OTel setup. Add our processor to it:
+
+```diff
+  // src/instrumentation.ts (the app's, already exists)
+  const sdk = new NodeSDK({
+    instrumentations: [getNodeAutoInstrumentations()],
+    spanProcessors: [
+      new BatchSpanProcessor(new OTLPTraceExporter()),
++     ...flowRecording.processors(),   // empty unless FLOW_RECORD=1
+    ],
+  });
+```
+
+And load that same file in the tests, before our runner integration:
 
 ```diff
   // vitest.config.ts (Jest: setupFiles in jest.config.js)
 - setupFiles: ['./test/setup.ts'],
-+ setupFiles: ['flow-recording/register', './test/setup.ts'],
++ setupFiles: ['./src/instrumentation.ts', 'flow-recording/vitest', './test/setup.ts'],
 ```
 
-`flow-recording/register` has to load first, so that the instrumentations patch modules before the app loads them. It:
-- starts an OTel SDK with the auto-instrumentations and an in-memory exporter, or, if the app already starts its own SDK, attaches to it instead of creating a second one;
-- opens a root span per test, named `describe › it`, using the runner's `beforeEach`/`afterEach` globals;
-- does nothing unless recording is on (`FLOW_RECORD=1`), so normal test runs pay nothing.
+- `flowRecording.processors()` returns an in-memory span processor (simple, not batched, so the spans are there when a test ends). It instruments nothing.
+- `flow-recording/vitest` opens a root span per test (`describe › it`) through the app's tracer provider, adds the test-only `fetch` seam for msw, and writes one recording per test.
+- Both do nothing unless `FLOW_RECORD=1`, so normal test runs pay nothing.
+
+Why a line in the app's file and not zero: OTel SDK 2.x removed `addSpanProcessor`, so processors are passed when the provider is built. The zero-touch alternative is an in-process OTLP receiver behind the standard `OTEL_EXPORTER_OTLP_ENDPOINT`, at the cost of batching and an async flush. Still open.
+
+**No OTel in the app?** `flow-recording/register` is a preset: the standard auto-instrumentations plus our processor, in one setupFile. It's the fallback, not the main path.
 
 Optional `flow.config.ts`, only to make the picture read better:
 
