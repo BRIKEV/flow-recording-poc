@@ -43,6 +43,9 @@ function wrapFetch() {
     try {
       const response = await context.with(trace.setSpan(context.active(), span), () => current(input, init));
       span.setAttribute('http.response.status_code', response.status);
+      if (isText(response.headers.get('content-type'))) {
+        span.setAttribute('flow.response.body', (await response.clone().text()).slice(0, 2000));
+      }
       return response;
     } finally {
       span.end();
@@ -52,13 +55,17 @@ function wrapFetch() {
   globalThis.fetch = wrapped;
 }
 
-// OTel doesn't capture bodies, and the request body is what a reviewer wants to see
-// (`POST /notes {user: "U1"}`). Collect what any http client writes (supertest, or the
-// app's own outbound calls) and tie it to its client span through the traceparent
-// header the http instrumentation already injects. A test-only seam, like fetch.
-const requestBodies = new Map<string, string>();
+// Only bodies a reviewer can read: JSON, text, forms
+const isText = (contentType: string | null | undefined) => /json|text|x-www-form-urlencoded/.test(contentType ?? '');
+
+// OTel doesn't capture bodies, and they are what a reviewer wants to see
+// (`POST /notes {user: "U1"} → 201 {id: 1, …}`). Collect what any http client writes and
+// reads (supertest, or the app's own outbound calls) and tie it to its client span
+// through the traceparent header the http instrumentation already injects. A test-only
+// seam, like fetch.
+const bodies = new Map<string, { request?: string; response?: string }>();
 type BodyRequest = http.ClientRequest & { __flowBody?: string };
-function captureRequestBodies() {
+function captureBodies() {
   const proto = http.ClientRequest.prototype as BodyRequest & { __flowWrapped?: boolean };
   if (proto.__flowWrapped) return;
   proto.__flowWrapped = true;
@@ -73,7 +80,16 @@ function captureRequestBodies() {
   proto.end = function (this: BodyRequest, chunk?: unknown, ...rest: unknown[]) {
     collect(this, chunk);
     const spanId = String(this.getHeader('traceparent') ?? '').split('-')[2];
-    if (spanId && this.__flowBody) requestBodies.set(spanId, this.__flowBody.slice(0, 2000));
+    if (spanId) {
+      const entry = { request: this.__flowBody?.slice(0, 2000) } as { request?: string; response?: string };
+      bodies.set(spanId, entry);
+      this.once('response', (res: http.IncomingMessage) => {
+        if (!isText(res.headers['content-type'])) return;
+        let text = '';
+        res.on('data', (c: Buffer | string) => (text += c.toString()));
+        res.on('end', () => (entry.response = text.slice(0, 2000)));
+      });
+    }
     return (end as (...a: unknown[]) => BodyRequest).call(this, chunk, ...rest);
   } as typeof proto.end;
 }
@@ -81,9 +97,9 @@ function captureRequestBodies() {
 beforeEach((ctx) => {
   if (!enabled) return;
   exporter.reset();
-  requestBodies.clear();
+  bodies.clear();
   wrapFetch();
-  captureRequestBodies();
+  captureBodies();
   // Make the test span the active context for the rest of the test, so every span nests under it
   testSpan = tracer.startSpan(ctx.task.name, {}, ROOT_CONTEXT);
   const manager = (context as unknown as { _getContextManager(): { _asyncLocalStorage?: { enterWith(c: unknown): void } } })._getContextManager();
@@ -134,6 +150,11 @@ function withPhases(spans: RecordedSpan[]): RecordedSpan[] {
 
 type RecordedSpan = ReturnType<typeof toJson>;
 
+const bodyAttributes = (b?: { request?: string; response?: string }) => ({
+  ...(b?.request ? { 'flow.request.body': b.request } : {}),
+  ...(b?.response ? { 'flow.response.body': b.response } : {}),
+});
+
 const toJson = (s: ReadableSpan) => ({
   name: s.name,
   kind: s.kind,
@@ -145,7 +166,7 @@ const toJson = (s: ReadableSpan) => ({
   endTime: s.endTime,
   attributes: {
     ...(s.attributes as Record<string, unknown>),
-    ...(requestBodies.has(s.spanContext().spanId) ? { 'flow.request.body': requestBodies.get(s.spanContext().spanId) } : {}),
+    ...bodyAttributes(bodies.get(s.spanContext().spanId)),
   },
   scope: s.instrumentationScope.name,
 });

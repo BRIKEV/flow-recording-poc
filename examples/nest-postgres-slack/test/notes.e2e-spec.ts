@@ -52,4 +52,46 @@ describe('notes', () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject([{ author: 'kevin', text: 'first' }]);
   });
+
+  describe('crud', () => {
+    const seed = async (...notes: Array<{ author: string; text: string }>) => {
+      const em = app.get(EntityManager).fork();
+      const created = notes.map((n) => em.create(Note, n));
+      await em.flush();
+      return created.map((n) => n.id);
+    };
+
+    it('gets a note by id', async () => {
+      const [id] = await seed({ author: 'kevin', text: 'first' });
+
+      const response = await request(app.getHttpServer()).get(`/notes/${id}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ id, author: 'kevin', text: 'first' });
+    });
+
+    it('returns 404 for a note that does not exist', async () => {
+      const response = await request(app.getHttpServer()).get('/notes/999');
+
+      expect(response.status).toBe(404);
+    });
+
+    it('updates the text of a note', async () => {
+      const [id] = await seed({ author: 'kevin', text: 'first' });
+
+      const response = await request(app.getHttpServer()).patch(`/notes/${id}`).send({ text: 'edited' });
+
+      expect(response.status).toBe(200);
+      expect(await rows()).toMatchObject([{ id, author: 'kevin', text: 'edited' }]);
+    });
+
+    it('deletes a note and keeps the others', async () => {
+      const [first, second] = await seed({ author: 'kevin', text: 'first' }, { author: 'ana', text: 'second' });
+
+      const response = await request(app.getHttpServer()).delete(`/notes/${first}`);
+
+      expect(response.status).toBe(204);
+      expect(await rows()).toMatchObject([{ id: second, author: 'ana' }]);
+    });
+  });
 });

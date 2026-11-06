@@ -11,7 +11,7 @@ This repo holds:
 
 | Example | Stack | Flows it records |
 |---|---|---|
-| [nest-postgres-slack](examples/nest-postgres-slack/) | NestJS 12, Express, MikroORM 7 → `pg`, Postgres, Slack API (`fetch`, mocked with msw), Vitest | `POST /notes` → Slack `users.info` → db insert → Slack `chat.postMessage` · `POST /notes` with an unknown user → Slack → 404, nothing stored · `GET /notes` → db select |
+| [nest-postgres-slack](examples/nest-postgres-slack/) | NestJS 12, Express, MikroORM 7 → `pg`, Postgres, Slack API (`fetch`, mocked with msw), Vitest | `POST /notes` → Slack `users.info` → db insert → Slack `chat.postMessage` · `POST /notes` with an unknown user → Slack → 404, nothing stored · `GET /notes` → db select · CRUD on `/notes/:id`: get (or 404), update, delete |
 
 Next candidates: a queue (RabbitMQ), Redis, nock instead of msw, detached work after a 202, Jest instead of Vitest.
 
