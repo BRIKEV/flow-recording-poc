@@ -29,9 +29,19 @@ Lanes: **actor / SUT / one per peer**. A peer comes from span attributes (`serve
 
 The same code and the same test must give byte-identical recordings, or the diff is useless. So:
 - trace/span ids and durations are dropped;
-- events are ordered by causality (parent/child, then start order), not by wall clock;
+- events are ordered by causality: parent/child, then the order in which the code started them (numbered by our span processor). Not by timestamp: span start times have millisecond precision and tie;
 - UUIDs become `<uuid#1>`, and timestamps are taken from the fake clock or become `<t+3ms>`;
 - the author can mark extra fields as volatile.
+
+### Curation
+
+The story hides what is true but says nothing to a reviewer, without per-library code. Three layers, last wins:
+
+1. **Our defaults**, against what every OTel span has: hide `dns`/`net` spans, db spans without a statement (connections, pool checkouts) and transaction control; flatten the auto-instrumentations' internal spans (middlewares, route handlers), keeping what happens inside them; show a test client call and the server span it reached as one line.
+2. **Hooks**: spans started by `beforeEach`/`afterEach` are setup, so they are hidden. The runner marks them.
+3. **The user's rules** in `flow.config` (see [04-api.md](04-api.md)) override both.
+
+The raw recording keeps every span, so anything hidden can still be found.
 
 ## The outputs (the "video")
 

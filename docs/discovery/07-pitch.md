@@ -74,9 +74,9 @@ Later, and this is the part no video can do: record `main` too and **diff the be
 1. **Joining the app's SDK.** Today it takes one line in the app's `instrumentation.ts`, because SDK 2.x has no `addSpanProcessor`. Is an in-process OTLP receiver (zero touch, via `OTEL_EXPORTER_OTLP_ENDPOINT`) worth the batching and flush cost? And what about Vitest/Jest isolation re-running `sdk.start()` per test file?
 2. **Mock seams.** I wrapped `fetch` to see msw calls. Is there a cleaner OTel-native route (undici diagnostics channel, a span processor, msw/interceptors events)? And nock, which patches `http`, against the http instrumentation?
 3. **"When is the trace done?"** Detached work after a 202 should stay in the recording. Tracking open spans in a SpanProcessor? Context propagation through queues and timers?
-4. **Noise vs signal.** About 45 spans per test → 15 lines in the story. Which semconv attributes can we rely on across instrumentation versions (`db.query.text` vs `db.statement`, the stable-semconv migration)? Is filtering per instrumentation the right axis?
+4. **Noise vs signal.** About 30 spans per test → 5 lines in the story. Curation is written against semconv, not libraries (defaults + hook phase + user rules: `show`/`hide`/`flatten`), so semconv is effectively our adapter. Which attributes can we rely on across instrumentation versions (`db.query.text` vs `db.statement`, the stable-semconv migration)? Are scope name and span kind a sound axis?
 5. **Gaps.** The Nest instrumentation emitted nothing on Nest 12. Jest's module registry is untested. What breaks first?
-6. **Determinism.** Ordering by causality, not by clock; ids; durations. Anything in the SDK that fights us?
+6. **Determinism.** Span start times come from `Date.now()` (ms) while end times use `performance.now()`, so siblings started in the same millisecond tie and swap between runs. I number spans in our processor's `onStart` and order by that. Is there a cleaner way, or something else in the SDK that fights us?
 7. **Linking spans to test lines**, for a view that annotates the test source with what each line caused.
 
 ## Where I come in: testing and devexp

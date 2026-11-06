@@ -1,16 +1,20 @@
 // Runner integration (would be `flow-recording/vitest`). Loaded as a setupFile after the
-// app's instrumentation. It opens one span per test, adds the test-only fetch seam, and
-// writes one recording per test into .flow/recordings/.
+// app's instrumentation. It opens one span per test, adds the test-only fetch seam, marks
+// which spans come from hooks and which from the test body, and writes one recording per
+// test (.json) into .flow/recordings/. Rendering is the renderer's job.
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { getFn, setFn } from '@vitest/runner';
 import { join } from 'node:path';
 import { context, trace, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
-import { enabled, exporter } from './index';
+import { enabled, exporter, nextStartOrder, startOrder } from './index';
 
 // Goes through the app's tracer provider: our spans live in the same trace as theirs
 const tracer = trace.getTracer('flow-recording');
 const outDir = join(process.cwd(), '.flow', 'recordings');
 let testSpan: ReturnType<typeof tracer.startSpan> | undefined;
+// Which spans the test body started (by start order), so hook spans can be told apart
+let body: { from: number; to: number } | undefined;
 
 // msw replaces globalThis.fetch, so the app's undici instrumentation never sees mocked
 // requests. Wrap whatever fetch is installed (msw's, once the test file's beforeAll has
@@ -48,6 +52,19 @@ beforeEach((ctx) => {
   testSpan = tracer.startSpan(ctx.task.name, {}, ROOT_CONTEXT);
   const manager = (context as unknown as { _getContextManager(): { _asyncLocalStorage?: { enterWith(c: unknown): void } } })._getContextManager();
   manager._asyncLocalStorage?.enterWith(trace.setSpan(ROOT_CONTEXT, testSpan));
+  // The runner reads the test function after the beforeEach hooks, so wrapping it here
+  // tells us exactly when the body starts and ends. aroundEach can't: it wraps the hooks too.
+  body = undefined;
+  const fn = getFn(ctx.task);
+  setFn(ctx.task, async () => {
+    const from = nextStartOrder();
+    try {
+      await fn();
+    } finally {
+      body = { from, to: nextStartOrder() };
+      setFn(ctx.task, fn);
+    }
+  });
 });
 
 afterEach((ctx) => {
@@ -56,45 +73,25 @@ afterEach((ctx) => {
   const spans = exporter.getFinishedSpans();
   mkdirSync(outDir, { recursive: true });
   const file = ctx.task.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 80);
-  writeFileSync(join(outDir, `${file}.txt`), `${ctx.task.name}\n${renderRaw(spans)}\n`);
-  writeFileSync(join(outDir, `${file}.json`), JSON.stringify(spans.map(toJson), null, 2));
+  writeFileSync(join(outDir, `${file}.json`), JSON.stringify(withPhases(spans.map(toJson)), null, 2));
 });
 
-// The unfiltered tree: what the app's instrumentation gives us before any curation
-function renderRaw(spans: ReadableSpan[]): string {
-  const ids = new Set(spans.map((s) => s.spanContext().spanId));
-  const children = new Map<string | undefined, ReadableSpan[]>();
-  for (const s of spans) {
-    const parentId = s.parentSpanContext?.spanId;
-    const key = parentId && ids.has(parentId) ? parentId : undefined;
-    children.set(key, [...(children.get(key) ?? []), s]);
-  }
-  const lines: string[] = [];
-  const walk = (parent: string | undefined, depth: number) => {
-    const kids = (children.get(parent) ?? []).sort((a, b) => toNs(a.startTime) - toNs(b.startTime));
-    for (const s of kids) {
-      lines.push(`${'  '.repeat(depth)}${describe(s)}`);
-      walk(s.spanContext().spanId, depth + 1);
-    }
+// flow.phase = 'test' | 'hook', decided for each span directly under the test span (by
+// whether the body started it) and inherited by its descendants. Detached work started by the body
+// stays 'test', because it descends from a body span.
+function withPhases(spans: RecordedSpan[]): RecordedSpan[] {
+  const byId = new Map(spans.map((s) => [s.spanId, s]));
+  const root = spans.find((s) => s.scope === 'flow-recording' && !byId.has(s.parentSpanId!));
+  const phaseOf = (s: RecordedSpan): string => {
+    if (s === root) return 'test';
+    const parent = byId.get(s.parentSpanId!);
+    if (parent && parent !== root) return phaseOf(parent);
+    return body && s.order >= body.from && s.order < body.to ? 'test' : 'hook';
   };
-  walk(undefined, 0);
-  return lines.join('\n');
+  return spans.map((s) => ({ ...s, attributes: { ...s.attributes, 'flow.phase': phaseOf(s) } }));
 }
 
-function describe(s: ReadableSpan): string {
-  const a = s.attributes;
-  const kind = ['internal', 'server', 'client', 'producer', 'consumer'][s.kind];
-  const status = a['http.response.status_code'] ?? a['http.status_code'];
-  const url = a['url.full'] ?? a['http.url'] ?? a['url.path'] ?? a['http.target'];
-  const sql = a['db.query.text'] ?? a['db.statement'];
-  const parts = [`[${kind}] ${s.name}`];
-  if (url) parts.push(String(url));
-  if (status) parts.push(`→ ${status}`);
-  if (sql) parts.push(`| ${String(sql).replace(/\s+/g, ' ').slice(0, 140)}`);
-  return parts.join(' ');
-}
-
-const toNs = (t: [number, number]) => t[0] * 1e9 + t[1];
+type RecordedSpan = ReturnType<typeof toJson>;
 
 const toJson = (s: ReadableSpan) => ({
   name: s.name,
@@ -102,6 +99,9 @@ const toJson = (s: ReadableSpan) => ({
   spanId: s.spanContext().spanId,
   traceId: s.spanContext().traceId,
   parentSpanId: s.parentSpanContext?.spanId,
-  attributes: s.attributes,
+  order: startOrder(s),
+  startTime: s.startTime,
+  endTime: s.endTime,
+  attributes: s.attributes as Record<string, unknown>,
   scope: s.instrumentationScope.name,
 });

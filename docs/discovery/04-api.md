@@ -42,8 +42,16 @@ export default defineFlowConfig({
   sut: 'apogee-bot',
   peers: { 'slack.com': 'slack' },   // name a lane; unnamed peers show as their host
   volatile: ['event_id', 'ts'],      // extra fields to normalise
+
+  // Curation, on top of our defaults (see 02-what.md › Curation). User rules win.
+  hide:    [{ attributes: { 'db.query.text': /from pg_database/ } }],  // MikroORM's connection check
+  flatten: [{ scope: '@acme/http-client' }],                           // their wrapper span: keep what's inside
+  show:    [{ name: /^middleware/ }],                                  // undo one of our defaults
+  rule:    (span) => (span.name.startsWith('cache.') ? 'hide' : undefined),
 });
 ```
+
+Curation actions: `show`, `hide` (the span and everything under it) and `flatten` (drop the line, keep its children). A matcher looks at what every OTel span has: `name`, `kind`, `scope` (instrumentation name) and `attributes`, each a string or a RegExp. `rule` is the escape hatch, and its answer wins. The POC version is [`examples/nest-postgres-slack/flow.config.mjs`](../../examples/nest-postgres-slack/flow.config.mjs).
 
 ## 2. In tests: nothing (the default)
 
