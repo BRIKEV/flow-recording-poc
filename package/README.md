@@ -17,7 +17,7 @@ In the code, the user-facing parts are marked `PUBLIC API`. Everything else is i
 ## Files
 
 - `src/index.ts`: the span processor. It numbers spans in start order (start timestamps only have millisecond precision) and keeps them in memory.
-- `src/vitest.ts`: the runner integration. One span per test, the `fetch` seam for msw, hook vs body phase, and `.flow/recordings/<test>.json`.
-- `src/story.mjs`: the renderer. It writes `<test>.raw.txt` (every span) and `<test>.story.txt` (curated in three layers: our defaults, hooks hidden, the user's rules).
+- `src/vitest.ts`: the runner integration. One span per test, hook vs body phase, test result and `describe` path, and `.flow/recordings/<test>.json`. Two test-only seams, because OTel doesn't see them: `fetch` under msw, and request bodies written through `http.ClientRequest` (supertest, or the app's outbound calls), tied to their client span by the `traceparent` header.
+- `src/story.mjs`: the renderer. It writes `<test>.raw.txt` (every span) and `<test>.story.txt`: the trace, curated in three layers (our defaults, hooks hidden, the user's rules) and kept nested as in the trace, with request payloads, writes as data (`+ note {…}`, `~ t {…} where …`, `- t where …`, parsed from standard SQL), reads as `read <table> where …`, named peers and ×N for repeated lines.
 
 Peer dependencies: `@opentelemetry/api`, `@opentelemetry/sdk-trace` (3.x, which replaces `sdk-trace-base`) and `vitest` 4. The app brings them.

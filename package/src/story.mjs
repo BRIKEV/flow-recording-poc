@@ -93,31 +93,100 @@ function decide(s, kids, config) {
 }
 
 // ---------- one line per span ----------
+// A line is { peer, text, result }: who was talked to, what was said, what came back.
+// Writes and payloads show their data, because that's what a reviewer checks.
 
-const shortSql = (q) =>
-  q
-    .replace(/ values \(.*/i, ' values (…)')
-    .replace(/^select (.{0,40}?)[, ].* from/i, 'select $1… from')
-    .slice(0, 90);
+const MAX = 90;
+const cut = (str, n = MAX) => (str.length > n ? str.slice(0, n - 1) + '…' : str);
 
-function line(s) {
+// Values as a reviewer reads them: {user: "U1", text: "hello"}
+function value(v) {
+  if (v === null || typeof v !== 'object') return typeof v === 'string' ? JSON.stringify(cut(v, 40)) : String(v);
+  if (Array.isArray(v)) return `[${v.slice(0, 3).map(value).join(', ')}${v.length > 3 ? ', …' : ''}]`;
+  return `{${Object.entries(v).map(([k, x]) => `${k}: ${value(x)}`).join(', ')}}`;
+}
+
+function payload(body) {
+  if (body === undefined || body === '') return '';
+  try {
+    return cut(value(JSON.parse(body)), 70);
+  } catch {
+    if (/^[\w.%-]+=[^&]*(&[\w.%-]+=[^&]*)*$/.test(body)) return cut(value(Object.fromEntries(new URLSearchParams(body))), 70);
+    return cut(JSON.stringify(body), 70);
+  }
+}
+
+// --- SQL, read as data. Standard SQL only, no ORM knowledge; anything else is shown as is.
+
+// Split on a separator at depth 0, outside quotes
+function split(str, sep = ',') {
+  const parts = [];
+  let depth = 0, quote = null, cur = '';
+  for (const ch of str) {
+    if (quote) { if (ch === quote) quote = null; }
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (ch === sep && depth === 0) { parts.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  if (cur.trim()) parts.push(cur.trim());
+  return parts;
+}
+const ident = (x) => x.replace(/"/g, '');
+const literal = (x) => {
+  if (/^'.*'$/s.test(x)) return x.slice(1, -1).replace(/''/g, "'");
+  if (/^-?\d+(\.\d+)?$/.test(x)) return Number(x);
+  if (/^(null|true|false)$/i.test(x)) return JSON.parse(x.toLowerCase());
+  return { toString: () => x }; // $1, now(), default…: shown verbatim
+};
+const asValue = (v) => (typeof v === 'object' && v !== null && !Array.isArray(v) && 'toString' in v && Object.keys(v).length === 1 ? String(v) : value(v));
+const record = (cols, vals) => `{${cols.map((c, i) => `${c}: ${asValue(vals[i])}`).join(', ')}}`;
+// Drop table aliases ("n0".id → id) and quotes
+const expr = (x) => x.replace(/"\w+"\./g, '').replace(/\b\w+\d\./g, '').replace(/"/g, '');
+
+function sqlLine(q) {
+  let m;
+  if ((m = q.match(/^insert into\s+(\S+)\s*\(([^)]*)\)\s*values\s*(.*?)(\s+(on conflict|returning)\b.*)?$/is))) {
+    const cols = split(m[2]).map(ident);
+    const rows = split(m[3]).map((t) => split(t.replace(/^\(|\)$/g, '')).map(literal));
+    const shown = rows.map((r) => record(cols, r)).join(', ');
+    return `+ ${ident(m[1])} ${rows.length > 1 && shown.length > 70 ? `×${rows.length} ${record(cols, rows[0])}, …` : shown}`;
+  }
+  if ((m = q.match(/^update\s+(\S+)(?:\s+as\s+\S+)?\s+set\s+(.*?)(?:\s+where\s+(.*?))?(\s+returning\b.*)?$/is))) {
+    const sets = split(m[2]).map((a) => a.split(/\s*=\s*/));
+    return `~ ${ident(m[1])} ${record(sets.map(([c]) => expr(c)), sets.map(([, v]) => literal(v)))}${m[3] ? ` where ${expr(m[3])}` : ''}`;
+  }
+  if ((m = q.match(/^delete from\s+(\S+)(?:\s+as\s+\S+)?(?:\s+where\s+(.*?))?(\s+returning\b.*)?$/is))) {
+    return `- ${ident(m[1])}${m[2] ? ` where ${expr(m[2])}` : ''}`;
+  }
+  if ((m = q.match(/^select\b.*?\bfrom\s+("?[\w.]+"?)(.*)$/is))) {
+    const where = m[2].match(/\bwhere\s+(.*?)(\s+(order by|group by|limit|offset|for update)\b.*)?$/is);
+    return `read ${ident(m[1])}${where ? ` where ${expr(where[1])}` : ''}`;
+  }
+  return q;
+}
+
+function line(s, inheritedBody) {
   const a = s.attributes;
   const status = a['http.response.status_code'] ?? a['http.status_code'];
+  const result = status ? `→ ${status}${status >= 400 ? ' ⚠' : ''}` : '';
   const method = a['http.request.method'] ?? a['http.method'];
-  if (isDb(s) && sql(s)) {
-    const write = /^(insert|update|delete|merge|upsert|replace)\b/i.test(sql(s));
-    return `db  ${write ? '' : '(read) '}${shortSql(sql(s))}`;
+  const body = payload(a['flow.request.body'] ?? inheritedBody);
+  if (isDb(s) && sql(s)) return { peer: 'db', text: cut(sqlLine(sql(s))), result: '' };
+  if (s.kind === SERVER && method) {
+    const route = a['http.route'] ?? a['url.path'] ?? a['http.target'];
+    return { peer: '', text: `${method} ${route}${body ? ` ${body}` : ''}`, result, server: true };
   }
-  if (s.kind === SERVER && method) return `${method} ${a['http.route'] ?? a['url.path'] ?? a['http.target']} → ${status}`;
   if (s.kind === CLIENT && method) {
     const url = new URL(a['url.full'] ?? a['http.url'] ?? `http://${a['server.address']}`);
-    return `→ ${url.host} ${method} ${url.pathname} → ${status}`;
+    return { arrow: '→', peer: url.host, text: `${method} ${url.pathname}${body ? ` ${body}` : ''}`, result };
   }
   if (s.kind === PRODUCER || s.kind === CONSUMER) {
     const dest = a['messaging.destination.name'] ?? s.name;
-    return `${s.kind === PRODUCER ? '⇢ publish' : '⇠ consume'} ${a['messaging.system'] ?? ''} ${dest}`.replace(/\s+/g, ' ');
+    return { arrow: s.kind === PRODUCER ? '⇢' : '⇠', peer: a['messaging.system'] ?? 'queue', text: `${s.kind === PRODUCER ? 'publish' : 'consume'} ${dest}`, result: '' };
   }
-  return s.name;
+  return { peer: '', text: s.name, result: '' };
 }
 
 // ---------- outputs ----------
@@ -141,19 +210,41 @@ function raw(spans) {
   return out.join('\n');
 }
 
+// The story: the trace, curated. Header, then one line per kept span, nested as in the
+// trace. Calls out read `→ peer …`, db spans `db …`, results line up in one column, and
+// repeated identical lines fold into ×N.
 function story(spans, config) {
   const { root, kids } = tree(spans);
-  const out = [root.name];
-  const walk = (s, depth) => {
+  const lines = [];
+  const walk = (s, depth, inheritedBody) => {
     for (const k of kids(s)) {
       const action = decide(k, kids(k), config);
       if (action === 'hide') continue;
-      if (action === 'show') out.push('  '.repeat(depth) + line(k));
-      walk(k, action === 'show' ? depth + 1 : depth);
+      if (action === 'show') {
+        const l = line(k, inheritedBody);
+        const peer = config.peers?.[l.peer] ?? l.peer;
+        const label = l.arrow ? `${l.arrow} ${peer}  ` : peer ? `${peer}  ` : '';
+        lines.push({ depth, text: `${label}${l.text}`, result: l.result });
+      }
+      // A flattened test client call hands its request body to the server span it reached
+      walk(k, action === 'show' ? depth + 1 : depth, action === 'flatten' ? k.attributes['flow.request.body'] : undefined);
     }
   };
   walk(root, 1);
-  return out.join('\n');
+
+  const folded = [];
+  for (const l of lines) {
+    const prev = folded.at(-1);
+    if (prev && prev.depth === l.depth && prev.text === l.text && prev.result === l.result) prev.times++;
+    else folded.push({ ...l, times: 1 });
+  }
+
+  const left = folded.map((l) => `${'  '.repeat(l.depth)}${l.text}${l.times > 1 ? ` ×${l.times}` : ''}`);
+  const column = Math.min(Math.max(0, ...left.map((x) => x.length)) + 2, 100);
+  const state = root.attributes['flow.test.state'];
+  const suite = root.attributes['flow.test.suite'];
+  const header = `${state === 'pass' ? '✔' : state === 'fail' ? '✘' : '·'} ${suite ? `${suite} › ` : ''}${root.name}`;
+  return [header, ...left.map((x, i) => (folded[i].result ? `${x.padEnd(column)}${folded[i].result}` : x))].join('\n');
 }
 
 // ---------- cli ----------

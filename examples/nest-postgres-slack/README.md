@@ -25,12 +25,12 @@ npm run story    # <test>.raw.txt + <test>.story.txt
 ```
 
 ```
-creates a note: looks up the author in Slack, stores it and announces it
-  POST /notes → 201
-    → slack.com POST /api/users.info → 200
-    db  insert into "note" ("author", "text") values (…)
-    → slack.com POST /api/chat.postMessage → 200
-  db  (read) select "n0".* from "note" as "n0" order by "n0"."id" asc
+✔ notes › creates a note: looks up the author in Slack, stores it and announces it
+  POST /notes {user: "U1", text: "hello"}                                                → 201
+    → slack  POST /api/users.info {user: "U1"}                                           → 200
+    db  + note {author: "kevin", text: "hello"}
+    → slack  POST /api/chat.postMessage {channel: "CNOTES", text: "kevin wrote: hello"}  → 200
+  db  read note
 ```
 
 `npm start` runs the server against the same database. Slack calls then go to the real `SLACK_API_URL`, so set `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` if you want to try it live.

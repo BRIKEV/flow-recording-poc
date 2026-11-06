@@ -6,10 +6,11 @@
 //   setupFiles: ['./src/instrumentation.ts', 'flow-recording/vitest', './test/setup.ts']
 //
 // It exports nothing. Everything below is internal: with FLOW_RECORD=1 it opens one span
-// per test, adds the test-only fetch seam, marks which spans come from hooks and which
+// per test, adds the test-only seams (fetch under msw, request bodies), marks which spans come from hooks and which
 // from the test body, and writes one recording per test to .flow/recordings/<test>.json.
 // Rendering is story.mjs's job.
 import { mkdirSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import { getFn, setFn } from '@vitest/runner';
 import { join } from 'node:path';
 import { context, trace, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
@@ -51,10 +52,38 @@ function wrapFetch() {
   globalThis.fetch = wrapped;
 }
 
+// OTel doesn't capture bodies, and the request body is what a reviewer wants to see
+// (`POST /notes {user: "U1"}`). Collect what any http client writes (supertest, or the
+// app's own outbound calls) and tie it to its client span through the traceparent
+// header the http instrumentation already injects. A test-only seam, like fetch.
+const requestBodies = new Map<string, string>();
+type BodyRequest = http.ClientRequest & { __flowBody?: string };
+function captureRequestBodies() {
+  const proto = http.ClientRequest.prototype as BodyRequest & { __flowWrapped?: boolean };
+  if (proto.__flowWrapped) return;
+  proto.__flowWrapped = true;
+  const collect = (req: BodyRequest, chunk: unknown) => {
+    if (typeof chunk === 'string' || chunk instanceof Uint8Array) req.__flowBody = (req.__flowBody ?? '') + Buffer.from(chunk).toString();
+  };
+  const { write, end } = proto;
+  proto.write = function (this: BodyRequest, chunk: unknown, ...rest: unknown[]) {
+    collect(this, chunk);
+    return (write as (...a: unknown[]) => boolean).call(this, chunk, ...rest);
+  } as typeof proto.write;
+  proto.end = function (this: BodyRequest, chunk?: unknown, ...rest: unknown[]) {
+    collect(this, chunk);
+    const spanId = String(this.getHeader('traceparent') ?? '').split('-')[2];
+    if (spanId && this.__flowBody) requestBodies.set(spanId, this.__flowBody.slice(0, 2000));
+    return (end as (...a: unknown[]) => BodyRequest).call(this, chunk, ...rest);
+  } as typeof proto.end;
+}
+
 beforeEach((ctx) => {
   if (!enabled) return;
   exporter.reset();
+  requestBodies.clear();
   wrapFetch();
+  captureRequestBodies();
   // Make the test span the active context for the rest of the test, so every span nests under it
   testSpan = tracer.startSpan(ctx.task.name, {}, ROOT_CONTEXT);
   const manager = (context as unknown as { _getContextManager(): { _asyncLocalStorage?: { enterWith(c: unknown): void } } })._getContextManager();
@@ -76,6 +105,11 @@ beforeEach((ctx) => {
 
 afterEach((ctx) => {
   if (!enabled) return;
+  // For the header: describe path and result
+  const suites: string[] = [];
+  for (let s = ctx.task.suite; s && !('filepath' in s); s = s.suite) suites.unshift(s.name);
+  testSpan?.setAttribute('flow.test.suite', suites.join(' › '));
+  testSpan?.setAttribute('flow.test.state', ctx.task.result?.state ?? 'unknown');
   testSpan?.end();
   const spans = exporter.getFinishedSpans();
   mkdirSync(outDir, { recursive: true });
@@ -109,6 +143,9 @@ const toJson = (s: ReadableSpan) => ({
   order: startOrder(s),
   startTime: s.startTime,
   endTime: s.endTime,
-  attributes: s.attributes as Record<string, unknown>,
+  attributes: {
+    ...(s.attributes as Record<string, unknown>),
+    ...(requestBodies.has(s.spanContext().spanId) ? { 'flow.request.body': requestBodies.get(s.spanContext().spanId) } : {}),
+  },
   scope: s.instrumentationScope.name,
 });
