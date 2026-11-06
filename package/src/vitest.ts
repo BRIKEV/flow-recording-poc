@@ -1,12 +1,19 @@
-// Runner integration (would be `flow-recording/vitest`). Loaded as a setupFile after the
-// app's instrumentation. It opens one span per test, adds the test-only fetch seam, marks
-// which spans come from hooks and which from the test body, and writes one recording per
-// test (.json) into .flow/recordings/. Rendering is the renderer's job.
+// flow-recording/vitest: the runner integration.
+//
+// PUBLIC API (what the user touches): only its name, as a Vitest setupFile, after the
+// app's instrumentation file:
+//
+//   setupFiles: ['./src/instrumentation.ts', 'flow-recording/vitest', './test/setup.ts']
+//
+// It exports nothing. Everything below is internal: with FLOW_RECORD=1 it opens one span
+// per test, adds the test-only fetch seam, marks which spans come from hooks and which
+// from the test body, and writes one recording per test to .flow/recordings/<test>.json.
+// Rendering is story.mjs's job.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { getFn, setFn } from '@vitest/runner';
 import { join } from 'node:path';
 import { context, trace, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import { enabled, exporter, nextStartOrder, startOrder } from './index';
 
 // Goes through the app's tracer provider: our spans live in the same trace as theirs

@@ -13,7 +13,7 @@ The app already has its OTel setup. Add our processor to it:
   const sdk = new NodeSDK({
     instrumentations: [getNodeAutoInstrumentations()],
     spanProcessors: [
-      new BatchSpanProcessor(new OTLPTraceExporter()),
+      new BatchSpanProcessor({ exporter: new OTLPTraceExporter() }),
 +     ...flowRecording.processors(),   // empty unless FLOW_RECORD=1
     ],
   });

@@ -1,0 +1,8 @@
+{
+  "name": "flow-recording-poc",
+  "private": true,
+  "workspaces": [
+    "package",
+    "examples/*"
+  ]
+}

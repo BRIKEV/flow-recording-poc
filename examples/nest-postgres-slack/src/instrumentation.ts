@@ -4,15 +4,15 @@
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { flowRecording } from '../flow-recording';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace';
+import { flowRecording } from 'flow-recording'; // ← flow recording
 
 const sdk = new NodeSDK({
   serviceName: 'notes',
   instrumentations: [getNodeAutoInstrumentations()],
   spanProcessors: [
-    ...(process.env.OTEL_EXPORTER_OTLP_ENDPOINT ? [new BatchSpanProcessor(new OTLPTraceExporter())] : []),
-    ...flowRecording.processors(), // the only line flow recording adds; empty unless FLOW_RECORD=1
+    ...(process.env.OTEL_EXPORTER_OTLP_ENDPOINT ? [new BatchSpanProcessor({ exporter: new OTLPTraceExporter() })] : []),
+    ...flowRecording.processors(), // ← flow recording: the only line it adds; empty unless FLOW_RECORD=1
   ],
 });
 sdk.start();

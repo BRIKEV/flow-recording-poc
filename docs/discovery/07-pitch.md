@@ -24,7 +24,7 @@ What a team does: two lines.
 ```diff
   // src/instrumentation.ts (the app's)
   spanProcessors: [
-    new BatchSpanProcessor(new OTLPTraceExporter()),
+    new BatchSpanProcessor({ exporter: new OTLPTraceExporter() }),
 +   ...flowRecording.processors(),      // empty unless FLOW_RECORD=1
   ],
 

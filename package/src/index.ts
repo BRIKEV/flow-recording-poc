@@ -1,5 +1,10 @@
-// What would be the `flow-recording` package. It instruments nothing: it collects the
-// spans the app's own OpenTelemetry setup already produces.
+// flow-recording: the entry point the app imports from its own OTel setup.
+// It instruments nothing: it collects the spans the app's instrumentation already produces.
+//
+// PUBLIC API (what the user touches):
+//   flowRecording.processors()   in the app's instrumentation file, inside spanProcessors
+//   FLOW_RECORD=1                env var that turns recording on
+// Everything else here is internal, shared with ./vitest.ts.
 import type { Context } from '@opentelemetry/api';
 import {
   InMemorySpanExporter,
@@ -7,7 +12,9 @@ import {
   type ReadableSpan,
   type Span,
   type SpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+} from '@opentelemetry/sdk-trace';
+
+// Internal ----------------------------------------------------------------------------
 
 export const enabled = process.env.FLOW_RECORD === '1';
 
@@ -27,7 +34,7 @@ export const startOrder = (span: ReadableSpan) => state.order.get(span) ?? Numbe
 export const nextStartOrder = () => state.next;
 
 class RecordingProcessor implements SpanProcessor {
-  private inner = new SimpleSpanProcessor(exporter);
+  private inner = new SimpleSpanProcessor({ exporter });
   onStart(span: Span, parentContext: Context) {
     state.order.set(span, state.next++);
     this.inner.onStart(span, parentContext);
@@ -43,7 +50,16 @@ class RecordingProcessor implements SpanProcessor {
   }
 }
 
+// PUBLIC API ---------------------------------------------------------------------------
+
+/**
+ * Spread into the app's own `spanProcessors`:
+ *
+ *   new NodeSDK({ spanProcessors: [yourExporters, ...flowRecording.processors()] })
+ *
+ * Returns nothing unless FLOW_RECORD=1, so production and plain test runs are untouched.
+ */
 export const flowRecording = {
-  // Added to the app's spanProcessors. Simple (not batched), so spans are there when a test ends.
+  // Simple (not batched), so the spans are there when a test ends.
   processors: (): SpanProcessor[] => (enabled ? [new RecordingProcessor()] : []),
 };

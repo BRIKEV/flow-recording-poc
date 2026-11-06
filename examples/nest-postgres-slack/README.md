@@ -11,13 +11,14 @@ The smallest backend with the three boundaries of the apogee-bot spike: an HTTP 
 What is what:
 - `src/`: the app. `src/instrumentation.ts` is its own OTel setup (NodeSDK + auto-instrumentations), with one line for flow recording.
 - `test/`: its tests and test support. They know nothing about recording.
-- `flow-recording/`: what would become the package. It collects spans and writes recordings; it instruments nothing.
 - `flow.config.mjs`: the app's own curation rule (hide MikroORM's `pg_database` check), on top of the renderer's defaults.
+
+Flow recording itself lives in [`package/`](../../package/) and is imported as `flow-recording`. Every line this example adds for it is marked `← flow recording`.
 
 Why this stack: MikroORM 7 is ESM and loads `pg` (CJS), which was the riskiest case for OTel patching inside Vitest. The Slack client uses plain `fetch`, mocked with msw, which is the case that needs the `fetch` seam.
 
 ```bash
-npm install
+npm install      # at the repo root (workspaces)
 npm run db:up
 npm run record   # .flow/recordings/<test>.json
 npm run story    # <test>.raw.txt + <test>.story.txt

@@ -1,4 +1,4 @@
-// Optional: the app's own curation rules, on top of flow recording's defaults.
+// ← flow recording (optional): the app's own curation rules, on top of flow recording's defaults.
 // Matchers look at what every OTel span has: name, kind, scope, attributes.
 // Actions: show | hide (with everything under it) | flatten (keep its children).
 export default {

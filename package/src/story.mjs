@@ -1,6 +1,10 @@
-// POC renderer: turns recordings (.json spans) into what a reviewer reads.
+#!/usr/bin/env node
+// flow-recording's renderer: turns recordings (.json spans) into what a reviewer reads.
 //
-//   node renderer/story.mjs <recording.json | recordings dir> [--config flow.config.mjs]
+// PUBLIC API (what the user touches):
+//   CLI              flow-recording <recording.json | recordings dir> [--config flow.config.mjs]
+//   flow.config.mjs  optional, in the app's root: curation rules (show / hide / flatten / rule),
+//                    see "layer 3" below. Everything else in this file is internal.
 //
 // For each recording it writes <name>.raw.txt (every span, stable order) and
 // <name>.story.txt (curated), and prints the stories. Without --config it loads
@@ -69,6 +73,13 @@ const DEFAULTS = [
 const clientOfServer = (s, kids) => s.kind === CLIENT && kids.some((k) => k.kind === SERVER);
 
 // ---------- layers 2 and 3 ----------
+// Layer 3 is the user's flow.config.mjs (PUBLIC API):
+//   export default {
+//     show:    [matcher, …],   // force a line
+//     hide:    [matcher, …],   // drop the span and everything under it
+//     flatten: [matcher, …],   // drop the line, keep its children
+//     rule:    (span) => 'show' | 'hide' | 'flatten' | undefined,   // escape hatch, wins
+//   }
 
 function decide(s, kids, config) {
   let action = 'show';
