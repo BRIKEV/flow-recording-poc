@@ -25,7 +25,7 @@ What a team does: two lines.
   // src/instrumentation.ts (the app's)
   spanProcessors: [
     new BatchSpanProcessor({ exporter: new OTLPTraceExporter() }),
-+   ...flowRecording.processors(),      // empty unless FLOW_RECORD=1
++   ...flowRecording.processors(),      // inert outside the test setupFile
   ],
 
   // vitest.config.ts

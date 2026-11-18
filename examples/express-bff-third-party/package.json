@@ -7,7 +7,6 @@
   "scripts": {
     "start": "tsx --import ./src/instrumentation.ts src/main.ts",
     "test": "vitest run",
-    "record": "FLOW_RECORD=1 vitest run",
     "story": "flow-recording .flow/recordings"
   },
   "dependencies": {

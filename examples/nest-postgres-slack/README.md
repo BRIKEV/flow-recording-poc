@@ -23,7 +23,7 @@ Why this stack: MikroORM 7 is ESM and loads `pg` (CJS), which was the riskiest c
 ```bash
 npm install      # at the repo root (workspaces)
 npm run db:up
-npm run record   # .flow/recordings/<test>.json
+npm test         # .flow/recordings/<test>.json
 npm run story    # <test>.raw.txt + <test>.story.txt
 ```
 

@@ -18,7 +18,7 @@
 //   hide     drop the span and everything under it
 //   flatten  drop the line, keep its children one level up
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const KIND = ['internal', 'server', 'client', 'producer', 'consumer'];
@@ -365,6 +365,28 @@ const target = args[0];
 const files = statSync(target).isDirectory()
   ? readdirSync(target).filter((f) => f.endsWith('.json')).sort().map((f) => join(target, f))
   : [target];
+
+// Coverage: a library the app loaded, with an OTel instrumentation installed, that produced
+// no span in any test file. Its calls are missing from every story, so say it first.
+const coverageDir = join(statSync(target).isDirectory() ? target : dirname(target), '..', 'coverage');
+const gaps = new Map();
+if (existsSync(coverageDir)) {
+  const seen = new Set();
+  for (const f of readdirSync(coverageDir).filter((x) => x.endsWith('.json')).sort()) {
+    for (const c of JSON.parse(readFileSync(join(coverageDir, f), 'utf8'))) {
+      if (c.spans) seen.add(c.package);
+      else gaps.set(c.package, c.instrumentation);
+    }
+  }
+  for (const pkg of seen) gaps.delete(pkg);
+}
+if (gaps.size) {
+  const warning = [...gaps]
+    .map(([pkg, instrumentation]) => `⚠ ${pkg} was used but ${instrumentation} produced no spans: its calls are missing from these stories`)
+    .join('\n');
+  writeFileSync(join(coverageDir, '..', 'coverage.txt'), warning + '\n');
+  console.log(warning + '\n');
+}
 
 for (const file of files) {
   const spans = JSON.parse(readFileSync(file, 'utf8'));

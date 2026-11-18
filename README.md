@@ -24,7 +24,7 @@ Next candidates: Redis, detached work after a 202, Jest instead of Vitest.
 What an example adds to use it, each marked `← flow recording` in the code:
 - `src/instrumentation.ts`: `...flowRecording.processors()` in its own `spanProcessors`.
 - `vitest.config.mts`: `'flow-recording/vitest'` in `setupFiles`, right after the instrumentation.
-- `package.json`: `record` (`FLOW_RECORD=1 vitest run`) and `story` (`flow-recording .flow/recordings`).
+- `package.json`: `story` (`flow-recording .flow/recordings`). No env var: loading the setupFile is what turns recording on, so `npm test` records.
 - `flow.config.mjs` (optional): its own curation rules.
 
 Everything else in an example is the app and its tests, which are not touched. What each part of the package does: [package/README.md](package/README.md).
@@ -37,7 +37,6 @@ Requires Node 24 and Docker.
 npm install          # at the root: installs the package and every example (workspaces)
 cd examples/nest-postgres-slack
 npm run db:up        # Postgres on port 5440 (express-rabbit-postgres: npm run infra:up)
-npm test             # plain test run, nothing recorded
-npm run record       # same tests, writes .flow/recordings/<test>.json
+npm test             # runs the tests and writes .flow/recordings/<test>.json
 npm run story        # writes <test>.raw.txt and <test>.story.txt, prints the stories
 ```

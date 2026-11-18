@@ -14,7 +14,7 @@ The app already has its OTel setup. Add our processor to it:
     instrumentations: [getNodeAutoInstrumentations()],
     spanProcessors: [
       new BatchSpanProcessor({ exporter: new OTLPTraceExporter() }),
-+     ...flowRecording.processors(),   // empty unless FLOW_RECORD=1
++     ...flowRecording.processors(),   // inert outside the test setupFile
     ],
   });
 ```
@@ -29,7 +29,8 @@ And load that same file in the tests, before our runner integration:
 
 - `flowRecording.processors()` returns an in-memory span processor (simple, not batched, so the spans are there when a test ends). It instruments nothing.
 - `flow-recording/vitest` opens a root span per test (`describe › it`) through the app's tracer provider, adds the test-only `fetch` seam for msw, and writes one recording per test.
-- Both do nothing unless `FLOW_RECORD=1`, so normal test runs pay nothing.
+- No env var. The processor is inert until `flow-recording/vitest` loads, so in production it never keeps a span. Adding the setupFile is the opt-in: a team that adds it records on every test run. Test-only options of the app's own instrumentation (message bodies, query values) use the app's own convention, such as `NODE_ENV=test`.
+- Coverage: after each test file, the integration notes which boundary libraries (databases, queues, caches, http clients) were loaded and whether their instrumentation produced spans. The renderer warns about any that produced none (`⚠ pg was used but @opentelemetry/instrumentation-pg produced no spans`), because a missing instrumentation would otherwise make a story look complete when it isn't.
 
 Why a line in the app's file and not zero: OTel SDK 2.x removed `addSpanProcessor`, so processors are passed when the provider is built. The zero-touch alternative is an in-process OTLP receiver behind the standard `OTEL_EXPORTER_OTLP_ENDPOINT`, at the cost of batching and an async flush. Still open.
 
@@ -135,7 +136,7 @@ then   both users are created and linked                   ✔
 ## 4. Running it
 
 ```bash
-FLOW_RECORD=1 npm test -- test/karma-journey   # local: writes .flow/report/ (index.html + OTLP JSON), gitignored
+npm test -- test/karma-journey   # local: writes .flow/report/ (index.html + OTLP JSON), gitignored
 ```
 
 In CI it works like TWD recording: a PR label (`flow-recording`) triggers an action that runs the test files the PR added or modified with recording on, and posts the comment with their journeys.

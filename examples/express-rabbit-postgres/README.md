@@ -15,14 +15,14 @@ What is what:
 - `test/`: its tests. They know nothing about recording.
 - `flow.config.mjs`: names the app `orders` in the story.
 
-**What this example needed from the user's instrumentation.** OTel doesn't capture message bodies or query values by default, so `src/instrumentation.ts` turns on two options of the community instrumentations, only while recording:
+**What this example needed from the user's instrumentation.** OTel doesn't capture message bodies or query values by default, so `src/instrumentation.ts` turns on two options of the community instrumentations, only in tests (`NODE_ENV=test`, the app's own convention):
 - `instrumentation-amqplib`: `publishHook` and `consumeHook` put the message body on the span.
 - `instrumentation-pg`: `enhancedDatabaseReporting` records the values of `$1, $2…`.
 
 ```bash
 npm install          # at the repo root (workspaces)
 npm run infra:up     # Postgres on 5441, RabbitMQ on 5673
-npm run record && npm run story
+npm test && npm run story
 ```
 
 ```

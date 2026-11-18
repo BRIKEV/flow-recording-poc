@@ -12,7 +12,7 @@ What it checks: nock-mocked calls are still seen by the http instrumentation (un
 
 ```bash
 npm install          # at the repo root (workspaces)
-npm run record && npm run story
+npm test && npm run story
 ```
 
 ```

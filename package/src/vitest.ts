@@ -5,21 +5,27 @@
 //
 //   setupFiles: ['./src/instrumentation.ts', 'flow-recording/vitest', './test/setup.ts']
 //
-// It exports nothing. Everything below is internal: with FLOW_RECORD=1 it opens one span
-// per test, adds the test-only seams (fetch under msw, request bodies), marks which spans come from hooks and which
-// from the test body, and writes one recording per test to .flow/recordings/<test>.json.
-// Rendering is story.mjs's job.
+// It exports nothing, and needs no env var: loading it is what turns recording on.
+// Everything below is internal: it opens one span per test, adds the test-only seams
+// (fetch under msw, request and response bodies), marks which spans come from hooks and
+// which from the test body, writes one recording per test to .flow/recordings/<test>.json,
+// and a coverage report per test file to .flow/coverage/. Rendering is story.mjs's job.
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import http from 'node:http';
 import { getFn, setFn } from '@vitest/runner';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { context, trace, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
-import { enabled, endOrder, exporter, nextStartOrder, startOrder } from './index';
+import { activate, endOrder, exporter, nextStartOrder, seenScopes, startOrder } from './index';
+
+activate();
 
 // Goes through the app's tracer provider: our spans live in the same trace as theirs
 const tracer = trace.getTracer('flow-recording');
 const outDir = join(process.cwd(), '.flow', 'recordings');
+const coverageDir = join(process.cwd(), '.flow', 'coverage');
+let testFile: string | undefined;
 let testSpan: ReturnType<typeof tracer.startSpan> | undefined;
 // Which spans the test body started (by start order), so hook spans can be told apart
 let body: { from: number; to: number } | undefined;
@@ -95,7 +101,7 @@ function captureBodies() {
 }
 
 beforeEach((ctx) => {
-  if (!enabled) return;
+  testFile = ctx.task.file?.filepath;
   exporter.reset();
   bodies.clear();
   wrapFetch();
@@ -120,7 +126,6 @@ beforeEach((ctx) => {
 });
 
 afterEach((ctx) => {
-  if (!enabled) return;
   // For the header: describe path and result
   const suites: string[] = [];
   for (let s = ctx.task.suite; s && !('filepath' in s); s = s.suite) suites.unshift(s.name);
@@ -131,6 +136,42 @@ afterEach((ctx) => {
   mkdirSync(outDir, { recursive: true });
   const file = ctx.task.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 80);
   writeFileSync(join(outDir, `${file}.json`), JSON.stringify(withPhases(spans.map(toJson)), null, 2));
+});
+
+// Coverage: boundary libraries (databases, queues, caches, http clients) the app loaded,
+// and whether their OTel instrumentation produced any span in this file's run. One that
+// was loaded but produced nothing is a silent gap in the stories (instrumentation
+// disabled, unsupported version), so the renderer warns about it. Only boundaries: a
+// framework's spans (express, nest, graphql) are flattened by the story anyway, and a
+// library can be loaded without being used (msw loads graphql). The instrumentation is
+// found by OTel's naming convention: pg → @opentelemetry/instrumentation-pg.
+// Limit: only CommonJS packages are seen (require.cache).
+const BOUNDARIES = new Set([
+  'pg', 'mysql', 'mysql2', 'mongodb', 'mongoose', 'tedious', 'oracledb', 'cassandra-driver', 'knex',
+  'ioredis', 'redis', 'memcached',
+  'amqplib', 'kafkajs',
+  'undici', 'socket.io', 'openai',
+]);
+
+afterAll(() => {
+  const require = createRequire(join(process.cwd(), 'noop.js'));
+  const packages = new Set<string>();
+  for (const file of Object.keys(require.cache)) {
+    const m = file.match(/.*node_modules\/((?:@[^/]+\/)?[^/]+)\//);
+    if (m) packages.add(m[1]);
+  }
+  const report = [...packages].sort().flatMap((pkg) => {
+    if (!BOUNDARIES.has(pkg)) return [];
+    const instrumentation = `@opentelemetry/instrumentation-${pkg.replace(/^@/, '').replace('/', '-')}`;
+    try {
+      require.resolve(instrumentation);
+    } catch {
+      return [];
+    }
+    return [{ package: pkg, instrumentation, spans: seenScopes().has(instrumentation) }];
+  });
+  mkdirSync(coverageDir, { recursive: true });
+  writeFileSync(join(coverageDir, `${basename(testFile ?? 'unknown')}.json`), JSON.stringify(report, null, 2));
 });
 
 // flow.phase = 'test' | 'hook', decided for each span directly under the test span (by

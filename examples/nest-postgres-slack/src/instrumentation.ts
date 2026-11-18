@@ -12,7 +12,7 @@ const sdk = new NodeSDK({
   instrumentations: [getNodeAutoInstrumentations()],
   spanProcessors: [
     ...(process.env.OTEL_EXPORTER_OTLP_ENDPOINT ? [new BatchSpanProcessor({ exporter: new OTLPTraceExporter() })] : []),
-    ...flowRecording.processors(), // ← flow recording: the only line it adds; empty unless FLOW_RECORD=1
+    ...flowRecording.processors(), // ← flow recording: the only line it adds; inert outside its test setupFile
   ],
 });
 sdk.start();
