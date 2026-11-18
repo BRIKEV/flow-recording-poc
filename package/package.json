@@ -5,10 +5,10 @@
   "description": "Render the OpenTelemetry trace of each backend test for PR review",
   "exports": {
     ".": "./src/index.ts",
-    "./vitest": "./src/vitest.ts"
+    "./vitest": "./src/record/vitest.ts"
   },
   "bin": {
-    "flow-recording": "./src/story.mjs"
+    "flow-recording": "./src/render/cli.mjs"
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.10.0",
