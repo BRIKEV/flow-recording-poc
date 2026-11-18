@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import type { Broker } from './broker';
+import { logger } from './logger';
 
 // No business logic on purpose: each function is just a flow across the boundaries
 export function ordersService(pool: pg.Pool, broker: Broker) {
@@ -8,6 +9,7 @@ export function ordersService(pool: pg.Pool, broker: Broker) {
     async create(item: string, quantity: number) {
       const { rows } = await pool.query('insert into orders (item, quantity) values ($1, $2) returning *', [item, quantity]);
       broker.publish('order.created', { orderId: rows[0].id, item, quantity });
+      logger.info({ orderId: rows[0].id }, 'order created');
       return rows[0];
     },
 
@@ -20,8 +22,12 @@ export function ordersService(pool: pg.Pool, broker: Broker) {
     // db update → db insert. Shared by the queue subscriber and the webhook.
     async markPaid(orderId: number, amount: number) {
       const { rowCount } = await pool.query("update orders set status = 'paid' where id = $1", [orderId]);
-      if (!rowCount) return false;
+      if (!rowCount) {
+        logger.warn({ orderId }, 'payment for an unknown order');
+        return false;
+      }
       await pool.query('insert into payments (order_id, amount) values ($1, $2)', [orderId, amount]);
+      logger.info({ orderId, amount }, 'order paid');
       return true;
     },
   };

@@ -13,6 +13,12 @@
   "peerDependencies": {
     "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/sdk-trace": "^3.1.0",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.0",
+    "@opentelemetry/sdk-logs": "^3.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/sdk-logs": {
+      "optional": true
+    }
   }
 }

@@ -30,6 +30,7 @@ And load that same file in the tests, before our runner integration:
 - `flowRecording.processors()` returns an in-memory span processor (simple, not batched, so the spans are there when a test ends). It instruments nothing.
 - `flow-recording/vitest` opens a root span per test (`describe › it`) through the app's tracer provider, adds the test-only `fetch` seam for msw, and writes one recording per test.
 - No env var. The processor is inert until `flow-recording/vitest` loads, so in production it never keeps a span. Adding the setupFile is the opt-in: a team that adds it records on every test run. Test-only options of the app's own instrumentation (message bodies, query values) use the app's own convention, such as `NODE_ENV=test`.
+- Logs (optional): `...flowRecording.logProcessors()` in the app's own `logRecordProcessors`. Any logger that sends its logs through OTel (pino, winston, bunyan with their instrumentations) shows in the story inside the span it was written in. An ESM app also registers OTel's ESM hook for loggers whose instrumentation replaces the package's export (pino): `register({ include: ['pino'] })` from `import-in-the-middle/register-hooks.mjs`.
 - Coverage: after each test file, the integration notes which boundary libraries (databases, queues, caches, http clients) were loaded and whether their instrumentation produced spans. The renderer warns about any that produced none (`⚠ pg was used but @opentelemetry/instrumentation-pg produced no spans`), because a missing instrumentation would otherwise make a story look complete when it isn't.
 
 Why a line in the app's file and not zero: OTel SDK 2.x removed `addSpanProcessor`, so processors are passed when the provider is built. The zero-touch alternative is an in-process OTLP receiver behind the standard `OTEL_EXPORTER_OTLP_ENDPOINT`, at the cost of batching and an async flush. Still open.
@@ -43,6 +44,11 @@ export default defineFlowConfig({
   sut: 'apogee-bot',
   peers: { 'slack.com': 'slack' },   // name a lane; unnamed peers show as their host
   volatile: ['event_id', 'ts'],      // extra fields to normalise
+  logs: {                            // or false (no logs), or a level: logs: 'warn'
+    level: 'info',                   // lowest level shown (default info)
+    hide: [{ body: /^health check/ }],             // drop these logs
+    show: [{ level: 'debug', scope: /pino/ }],     // keep these even below the level
+  },
 
   // Curation, on top of our defaults (see 02-what.md › Curation). User rules win.
   hide:    [{ attributes: { 'db.query.text': /from pg_database/ } }],  // MikroORM's connection check

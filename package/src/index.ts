@@ -2,11 +2,14 @@
 // It instruments nothing: it collects the spans the app's instrumentation already produces.
 //
 // PUBLIC API (what the user touches):
-//   flowRecording.processors()   in the app's instrumentation file, inside spanProcessors
+//   flowRecording.processors()      in the app's instrumentation file, inside spanProcessors
+//   flowRecording.logProcessors()   the same, inside logRecordProcessors (optional: the logs
+//                                   the app's logger sends through OTel, e.g. pino or winston)
 // No env var: the processor stays inert until the runner integration (flow-recording/vitest)
 // activates it. In production nothing activates it, so it never keeps a span.
 // Everything else here is internal, shared with ./vitest.ts.
 import type { Context } from '@opentelemetry/api';
+import type { LogRecordProcessor, ReadWriteLogRecord } from '@opentelemetry/sdk-logs';
 import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
@@ -26,8 +29,21 @@ type State = {
   order: WeakMap<object, number>;
   ended: WeakMap<object, number>;
   next: number;
-  // Instrumentation scopes that produced at least one span in this run (coverage check)
+  // Instrumentation scopes that produced at least one span or log in this run (coverage check)
   scopes: Set<string>;
+  logs: RecordedLog[];
+  // Whether the app added logProcessors(): only then is a silent logger a gap
+  logsWanted: boolean;
+};
+// A log as the renderer needs it, copied when it is emitted
+export type RecordedLog = {
+  order: number;
+  spanId?: string;
+  level?: string;
+  severity?: number;
+  body: unknown;
+  attributes: Record<string, unknown>;
+  scope: string;
 };
 const store = globalThis as typeof globalThis & { [key]?: State };
 const state = (store[key] ??= {
@@ -37,9 +53,16 @@ const state = (store[key] ??= {
   ended: new WeakMap(),
   next: 0,
   scopes: new Set(),
+  logs: [],
+  logsWanted: false,
 });
 export const exporter = state.exporter;
 export const seenScopes = () => state.scopes;
+export const recordedLogs = () => state.logs;
+export const logsWanted = () => state.logsWanted;
+export const resetLogs = () => {
+  state.logs = [];
+};
 
 // Called by the runner integration when it loads
 export const activate = () => {
@@ -77,6 +100,25 @@ class RecordingProcessor implements SpanProcessor {
   }
 }
 
+// Logs share the span counter, so a log lands exactly between the calls around it
+class LogProcessor implements LogRecordProcessor {
+  onEmit(log: ReadWriteLogRecord) {
+    if (!state.active) return;
+    state.scopes.add(log.instrumentationScope.name);
+    state.logs.push({
+      order: state.next++,
+      spanId: log.spanContext?.spanId,
+      level: log.severityText,
+      severity: log.severityNumber,
+      body: log.body,
+      attributes: { ...(log.attributes as Record<string, unknown>) },
+      scope: log.instrumentationScope.name,
+    });
+  }
+  async forceFlush() {}
+  async shutdown() {}
+}
+
 // PUBLIC API ---------------------------------------------------------------------------
 
 /**
@@ -88,4 +130,13 @@ class RecordingProcessor implements SpanProcessor {
  */
 export const flowRecording = {
   processors: (): SpanProcessor[] => [new RecordingProcessor()],
+  /**
+   * Spread into the app's own `logRecordProcessors`, to see the logs each flow wrote, in
+   * place. Any logger that sends its logs through OTel works (pino, winston, bunyan with
+   * their instrumentations). Inert outside tests, like `processors()`.
+   */
+  logProcessors: (): LogRecordProcessor[] => {
+    state.logsWanted = true;
+    return [new LogProcessor()];
+  },
 };

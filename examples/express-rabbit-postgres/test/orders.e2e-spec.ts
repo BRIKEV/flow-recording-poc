@@ -75,4 +75,10 @@ describe('orders', () => {
     expect(response.status).toBe(204);
     expect(await order(1)).toMatchObject({ status: 'paid' });
   });
+
+  it('rejects a payment webhook for an unknown order', async () => {
+    const response = await request(app).post('/webhooks/payments').send({ orderId: 99, amount: 25 });
+
+    expect(response.status).toBe(404);
+  });
 });

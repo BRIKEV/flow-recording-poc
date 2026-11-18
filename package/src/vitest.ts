@@ -8,18 +8,49 @@
 // It exports nothing, and needs no env var: loading it is what turns recording on.
 // Everything below is internal: it opens one span per test, adds the test-only seams
 // (fetch under msw, request and response bodies), marks which spans come from hooks and
-// which from the test body, writes one recording per test to .flow/recordings/<test>.json,
+// which from the test body, attaches the logs the app sent through OTel to the span they
+// were written in, writes one recording per test to .flow/recordings/<test>.json,
 // and a coverage report per test file to .flow/coverage/. Rendering is story.mjs's job.
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import module, { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import { getFn, setFn } from '@vitest/runner';
 import { basename, join } from 'node:path';
 import { context, trace, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
-import { activate, endOrder, exporter, nextStartOrder, seenScopes, startOrder } from './index';
+import { activate, endOrder, exporter, logsWanted, nextStartOrder, recordedLogs, resetLogs, seenScopes, startOrder, type RecordedLog } from './index';
 
 activate();
+bareEntryImports();
+
+// Vitest imports every dependency by its absolute path (/…/node_modules/pino/pino.js),
+// not by its name. OTel's ESM hook (import-in-the-middle) then sees a file inside the
+// package instead of the package, and instrumentations that replace a package's export
+// (pino's) skip it. When the URL is a package's main entry, resolve it by the package
+// name instead, as the app's own `import 'pino'` would. Knows no library; only matters
+// when the app registers OTel's ESM hook (module.registerHooks, Node >= 22.22.3 / 24.11.1).
+function bareEntryImports() {
+  if (typeof module.registerHooks !== 'function') return;
+  module.registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const path = specifier.startsWith('file://') ? fileURLToPath(specifier) : specifier;
+      const m = path.startsWith('/') && path.match(/^(.*\/node_modules\/)((?:@[^/]+\/)?[^/]+)\/.+$/);
+      // Leave alone require(), and the ESM hook's own import of the original module (from its
+      // wrapper, `…?iitm=true`), or the wrapper would import itself
+      const fromHook = context.parentURL?.includes('iitm');
+      if (!m || fromHook || context.conditions?.includes('require')) return nextResolve(specifier, context);
+      const [, dir, name] = m;
+      try {
+        const entry = nextResolve(name, { ...context, parentURL: pathToFileURL(dir).href });
+        if (entry.url.split('?')[0] === pathToFileURL(path).href) return entry;
+      } catch {
+        // no main entry for `import`: leave the URL as it is
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+}
 
 // Goes through the app's tracer provider: our spans live in the same trace as theirs
 const tracer = trace.getTracer('flow-recording');
@@ -103,6 +134,7 @@ function captureBodies() {
 beforeEach((ctx) => {
   testFile = ctx.task.file?.filepath;
   exporter.reset();
+  resetLogs();
   bodies.clear();
   wrapFetch();
   captureBodies();
@@ -135,7 +167,7 @@ afterEach((ctx) => {
   const spans = exporter.getFinishedSpans();
   mkdirSync(outDir, { recursive: true });
   const file = ctx.task.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 80);
-  writeFileSync(join(outDir, `${file}.json`), JSON.stringify(withPhases(spans.map(toJson)), null, 2));
+  writeFileSync(join(outDir, `${file}.json`), JSON.stringify(withLogs(withPhases(spans.map(toJson))), null, 2));
 });
 
 // Coverage: boundary libraries (databases, queues, caches, http clients) the app loaded,
@@ -152,6 +184,9 @@ const BOUNDARIES = new Set([
   'amqplib', 'kafkajs',
   'undici', 'socket.io', 'openai',
 ]);
+// Loggers whose instrumentation sends their logs through OTel. Checked only when the app
+// added logProcessors().
+const LOGGERS = new Set(['pino', 'winston', 'bunyan']);
 
 afterAll(() => {
   const require = createRequire(join(process.cwd(), 'noop.js'));
@@ -161,14 +196,15 @@ afterAll(() => {
     if (m) packages.add(m[1]);
   }
   const report = [...packages].sort().flatMap((pkg) => {
-    if (!BOUNDARIES.has(pkg)) return [];
+    const logger = LOGGERS.has(pkg) && logsWanted();
+    if (!BOUNDARIES.has(pkg) && !logger) return [];
     const instrumentation = `@opentelemetry/instrumentation-${pkg.replace(/^@/, '').replace('/', '-')}`;
     try {
       require.resolve(instrumentation);
     } catch {
       return [];
     }
-    return [{ package: pkg, instrumentation, spans: seenScopes().has(instrumentation) }];
+    return [{ package: pkg, instrumentation, signal: logger ? 'logs' : 'spans', seen: seenScopes().has(instrumentation) }];
   });
   mkdirSync(coverageDir, { recursive: true });
   writeFileSync(join(coverageDir, `${basename(testFile ?? 'unknown')}.json`), JSON.stringify(report, null, 2));
@@ -189,7 +225,24 @@ function withPhases(spans: RecordedSpan[]): RecordedSpan[] {
   return spans.map((s) => ({ ...s, attributes: { ...s.attributes, 'flow.phase': phaseOf(s) } }));
 }
 
-type RecordedSpan = ReturnType<typeof toJson>;
+// Each log goes on the span it was written in, as `logs`, with that span's phase. A log
+// written straight under the test span (no span of its own) is 'test' or 'hook' by when
+// it was written, like a span.
+function withLogs(spans: RecordedSpan[]): RecordedSpan[] {
+  const byId = new Map(spans.map((s) => [s.spanId, s]));
+  const root = spans.find((s) => s.scope === 'flow-recording' && !byId.has(s.parentSpanId!));
+  const logs = new Map<RecordedSpan, (RecordedLog & { phase: string })[]>();
+  for (const log of recordedLogs()) {
+    const span = byId.get(log.spanId!) ?? root;
+    if (!span) continue;
+    const phase = span !== root ? String(span.attributes['flow.phase'])
+      : body && log.order >= body.from && log.order < body.to ? 'test' : 'hook';
+    logs.set(span, [...(logs.get(span) ?? []), { ...log, phase }]);
+  }
+  return spans.map((s) => (logs.has(s) ? { ...s, logs: logs.get(s) } : s));
+}
+
+type RecordedSpan = ReturnType<typeof toJson> & { logs?: unknown[] };
 
 const bodyAttributes = (b?: { request?: string; response?: string }) => ({
   ...(b?.request ? { 'flow.request.body': b.request } : {}),

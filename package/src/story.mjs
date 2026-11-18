@@ -79,7 +79,13 @@ const clientOfServer = (s, kids) => s.kind === CLIENT && kids.some((k) => k.kind
 //     hide:    [matcher, …],   // drop the span and everything under it
 //     flatten: [matcher, …],   // drop the line, keep its children
 //     rule:    (span) => 'show' | 'hide' | 'flatten' | undefined,   // escape hatch, wins
+//     logs: {                   // or false, for no logs; or just a level: logs: 'warn'
+//       level: 'info',          //   lowest level shown (default info; 'debug', 'warn'…)
+//       hide: [logMatcher, …],  //   drop these logs
+//       show: [logMatcher, …],  //   keep these, even below the level
+//     },
 //   }
+// A logMatcher: { body?, level?, scope?, attributes?: { key: value } }, each a string or a RegExp.
 
 function decide(s, kids, config) {
   let action = 'show';
@@ -101,6 +107,7 @@ function decide(s, kids, config) {
 //   db        actor → db       insert / update / delete / select, as data
 //   PRODUCER  actor ⇢ broker   publish destination
 //   INTERNAL  the app's own spans: a step of the app
+//   log       actor · level    message {fields}, where it was written (⚠ from warn up)
 // The actor is `test` until something enters the app (a SERVER or CONSUMER span, or an
 // app span called straight from the test); inside, it is the app (config.sut).
 
@@ -239,6 +246,29 @@ function describeSpan(s, inherited = {}) {
   return { type: 'step', text: s.name, result: '' };
 }
 
+// --- logs: the ones the app sent through OTel, attached to the span they were written in.
+// OTel severity numbers: 1 trace, 5 debug, 9 info, 13 warn, 17 error, 21 fatal.
+const SEVERITY = { trace: 1, debug: 5, info: 9, warn: 13, error: 17, fatal: 21 };
+const logConfig = (logs) => (logs === false ? false : typeof logs === 'string' ? { level: logs } : logs ?? {});
+const matchesLog = (m, log) =>
+  (m.body === undefined || test(m.body, typeof log.body === 'string' ? log.body : JSON.stringify(log.body))) &&
+  (m.level === undefined || test(m.level, String(log.level ?? '').toLowerCase())) &&
+  (m.scope === undefined || test(m.scope, log.scope)) &&
+  Object.entries(m.attributes ?? {}).every(([k, v]) => test(v, log.attributes[k]));
+function shownLog(log, config) {
+  const c = logConfig(config.logs);
+  if (!c || log.phase === 'hook') return false;
+  if ((c.show ?? []).some((m) => matchesLog(m, log))) return true;
+  if ((c.hide ?? []).some((m) => matchesLog(m, log))) return false;
+  return (log.severity ?? SEVERITY.info) >= SEVERITY[c.level ?? 'info'];
+}
+
+function describeLog(log) {
+  const fields = Object.keys(log.attributes).length ? ` ${value(log.attributes)}` : '';
+  const message = typeof log.body === 'string' ? cut(log.body, 80) : value(log.body);
+  return { type: 'log', level: String(log.level ?? 'log').toLowerCase(), text: `${(log.severity ?? 0) >= SEVERITY.warn ? '⚠ ' : ''}${message}${fields}` };
+}
+
 // ---------- outputs ----------
 
 function raw(spans) {
@@ -254,7 +284,11 @@ function raw(spans) {
     if (sql(s)) parts.push(`| ${sql(s).slice(0, 140)}`);
     if (a['flow.phase'] === 'hook') parts.push('(hook)');
     out.push('  '.repeat(depth) + parts.join(' '));
-    for (const k of kids(s)) walk(k, depth + 1);
+    const logs = (s.logs ?? []).map((l) => ({ order: l.order, log: l }));
+    for (const k of [...kids(s), ...logs].sort((a, b) => a.order - b.order)) {
+      if (!k.log) walk(k, depth + 1);
+      else out.push('  '.repeat(depth + 1) + `[log] ${k.log.level} ${typeof k.log.body === 'string' ? k.log.body : JSON.stringify(k.log.body)}${k.log.phase === 'hook' ? ' (hook)' : ''}`);
+    }
   };
   walk(root, 0);
   return out.join('\n');
@@ -273,14 +307,18 @@ function story(spans, config) {
 
   // Kept children of a span; a flattened span is replaced by its own kept children. A
   // flattened test client call hands its bodies to the server span it reached.
+  // The span's own logs come in among them, by the order they were written.
   const visible = (s, inherited) =>
-    kids(s).flatMap((k) => {
-      const action = decide(k, kids(k), config);
-      if (action === 'hide') return [];
-      if (action === 'show') return [{ span: k, d: describeSpan(k, inherited) }];
-      const bodies = { request: k.attributes['flow.request.body'], response: k.attributes['flow.response.body'] };
-      return visible(k, k.kind === CLIENT ? bodies : undefined);
-    });
+    [
+      ...kids(s).flatMap((k) => {
+        const action = decide(k, kids(k), config);
+        if (action === 'hide') return [];
+        if (action === 'show') return [{ span: k, order: k.order, end: k.endOrder, d: describeSpan(k, inherited) }];
+        const bodies = { request: k.attributes['flow.request.body'], response: k.attributes['flow.response.body'] };
+        return visible(k, k.kind === CLIENT ? bodies : undefined);
+      }),
+      ...(s.logs ?? []).filter((l) => shownLog(l, config)).map((l) => ({ order: l.order, end: l.order, d: describeLog(l) })),
+    ].sort((a, b) => a.order - b.order);
 
   // A call with nothing under it, the kind that can be shown as one of a parallel group
   const leafCall = (item) => item.d.type === 'call' && !visible(item.span).length;
@@ -288,7 +326,8 @@ function story(spans, config) {
   const one = ({ span: k, d }, actor, indent) => {
     // Lines inside start under the receiving actor's name
     const inner = indent + actor.length + 3;
-    if (d.type === 'enter' || (d.type === 'step' && actor !== sut)) {
+    if (d.type === 'log') say(indent, actor, '·', d.level, d.text);
+    else if (d.type === 'enter' || (d.type === 'step' && actor !== sut)) {
       say(indent, actor, '→', sut, d.text);
       walk(k, sut, inner);
       if (d.result) say(indent, actor, '←', sut, d.result);
@@ -323,9 +362,9 @@ function story(spans, config) {
     const items = visible(s, inherited);
     for (let i = 0; i < items.length; ) {
       let j = i + 1;
-      let end = items[i].span.endOrder;
-      while (leafCall(items[i]) && j < items.length && leafCall(items[j]) && items[j].span.order < end) {
-        end = Math.max(end, items[j].span.endOrder);
+      let end = items[i].end;
+      while (leafCall(items[i]) && j < items.length && leafCall(items[j]) && items[j].order < end) {
+        end = Math.max(end, items[j].end);
         j++;
       }
       if (j - i > 1) parallel(items.slice(i, j), actor, indent);
@@ -374,15 +413,17 @@ if (existsSync(coverageDir)) {
   const seen = new Set();
   for (const f of readdirSync(coverageDir).filter((x) => x.endsWith('.json')).sort()) {
     for (const c of JSON.parse(readFileSync(join(coverageDir, f), 'utf8'))) {
-      if (c.spans) seen.add(c.package);
-      else gaps.set(c.package, c.instrumentation);
+      if (c.seen) seen.add(c.package);
+      else gaps.set(c.package, c);
     }
   }
   for (const pkg of seen) gaps.delete(pkg);
 }
 if (gaps.size) {
   const warning = [...gaps]
-    .map(([pkg, instrumentation]) => `⚠ ${pkg} was used but ${instrumentation} produced no spans: its calls are missing from these stories`)
+    .map(([pkg, c]) => c.signal === 'logs'
+      ? `⚠ ${pkg} was used but ${c.instrumentation} sent no logs: its logs are missing from these stories`
+      : `⚠ ${pkg} was used but ${c.instrumentation} produced no spans: its calls are missing from these stories`)
     .join('\n');
   writeFileSync(join(coverageDir, '..', 'coverage.txt'), warning + '\n');
   console.log(warning + '\n');
@@ -390,6 +431,7 @@ if (gaps.size) {
 
 for (const file of files) {
   const spans = JSON.parse(readFileSync(file, 'utf8'));
+  if (!tree(spans).root) continue; // not a test recording
   const base = file.replace(/\.json$/, '');
   writeFileSync(`${base}.raw.txt`, raw(spans) + '\n');
   const text = story(spans, config);
