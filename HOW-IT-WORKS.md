@@ -1,6 +1,6 @@
 # How a test becomes a story
 
-One real test, followed from `it()` to the last line of its story. The test is from [`examples/express-rabbit-postgres`](../examples/express-rabbit-postgres/test/orders.e2e-spec.ts):
+One real test, followed from `it()` to the last line of its story. The test is from [`examples/express-rabbit-postgres`](examples/express-rabbit-postgres/test/orders.e2e-spec.ts):
 
 ```ts
 it('rejects a payment webhook for an unknown order', async () => {
@@ -23,7 +23,7 @@ The package has two halves that never run together:
 
 | | When | Where | Output |
 |---|---|---|---|
-| **record** | while the tests run | `src/index.ts`, `src/record/` | `.flow/recordings/<test>.json` |
+| **record** | while the tests run | `src/index.js`, `src/record/` | `.flow/recordings/<test>.json` |
 | **render** | after, as a CLI | `src/render/` | `<test>.story.txt` and `<test>.raw.txt` |
 
 The JSON in between is the contract between the two halves. You can open it and read it.
@@ -37,21 +37,21 @@ spanProcessors: [...yours, ...flowRecording.processors()],
 logRecordProcessors: [...yours, ...flowRecording.logProcessors()],
 ```
 
-From then on, every span and log the app's instrumentation produces also reaches our processors (`record/processor.ts`). They do nothing yet: they are inert.
+From then on, every span and log the app's instrumentation produces also reaches our processors (`record/processor.js`). They do nothing yet: they are inert.
 
-Next comes the setupFile `flow-recording/vitest` (`record/vitest.ts`). Loading it:
+Next comes the setupFile `flow-recording/vitest` (`record/vitest.js`). Loading it:
 - calls `activate()`, so the processors start keeping things;
-- applies the Vitest + ESM fix (`record/esm-entry.ts`), so pino gets instrumented.
+- applies the Vitest + ESM fix (`record/esm-entry.js`), so pino gets instrumented.
 
 **The counter.** The processors give a number to every span start, span end and log, all from one counter. OTel timestamps only have millisecond precision, so two spans started in the same millisecond tie. With timestamps the order would change between runs; the counter is exact.
 
 ## 2. `beforeEach`: prepare the test
 
-`record/vitest.ts`, in order:
+`record/vitest.js`, in order:
 1. Forget the previous test (spans, logs, bodies).
 2. Install the seams (`record/seams/`). They capture what OTel doesn't record:
-   - `http-bodies.ts`: request and response bodies, for any http client.
-   - `fetch.ts`: fetch calls mocked with msw, which OTel never sees.
+   - `http-bodies.js`: request and response bodies, for any http client.
+   - `fetch.js`: fetch calls mocked with msw, which OTel never sees.
 3. Open the test's own span (`rejects a payment webhook…`) and make it the parent of everything that happens next.
 4. Wrap the test function, to note the counter value when the body starts and when it ends.
 
@@ -80,7 +80,7 @@ Meanwhile, the http seam saw supertest write `{"orderId":99,"amount":25}`. It re
 
 ## 4. `afterEach`: write the recording
 
-`record/recording.ts` turns the spans into JSON and adds four things to each one:
+`record/recording.js` turns the spans into JSON and adds four things to each one:
 - `order` / `endOrder`: the counter values from the table.
 - `flow.phase`:
   - A span right under the test span is `test` if it started inside the body window, and `hook` otherwise. So 98 and 100 are `hook`.
@@ -88,7 +88,7 @@ Meanwhile, the http seam saw supertest write `{"orderId":99,"amount":25}`. It re
 - `logs`: the warn (115) goes on span 110. It is the span that was active when the app wrote the log.
 - `flow.request.body` / `flow.response.body`: the bodies the seam tied to this span.
 
-`afterAll` also writes `.flow/coverage/<file>.json` (`record/coverage.ts`): the libraries that were loaded and whether their instrumentation produced anything.
+`afterAll` also writes `.flow/coverage/<file>.json` (`record/coverage.js`): the libraries that were loaded and whether their instrumentation produced anything.
 
 ## 5. The CLI: from JSON to story
 
@@ -131,10 +131,10 @@ These depend on things OTel or Vitest don't promise. They are the first suspects
 
 | What | Where | Why it is fragile |
 |---|---|---|
-| `enterWith` to make the test span the parent of everything | `record/vitest.ts` | not public OTel API |
-| `getFn` / `setFn` to wrap the test body | `record/vitest.ts` | `@vitest/runner` internals |
-| wrapping `http.ClientRequest.prototype` | `record/seams/http-bodies.ts` | monkey-patches Node's http client |
-| resolving package entries by name | `record/esm-entry.ts` | works around how Vitest imports dependencies |
+| `enterWith` to make the test span the parent of everything | `record/vitest.js` | not public OTel API |
+| `getFn` / `setFn` to wrap the test body | `record/vitest.js` | `@vitest/runner` internals |
+| wrapping `http.ClientRequest.prototype` | `record/seams/http-bodies.js` | monkey-patches Node's http client |
+| resolving package entries by name | `record/esm-entry.js` | works around how Vitest imports dependencies |
 
 ## Where to change what
 
@@ -146,4 +146,4 @@ These depend on things OTel or Vitest don't promise. They are the first suspects
 | read more SQL shapes | `render/sql.mjs` |
 | change indentation, alignment, the parallel bracket | `render/layout.mjs` |
 | capture something OTel doesn't | a new file in `record/seams/` |
-| support another test runner | a sibling of `record/vitest.ts` |
+| support another test runner | a sibling of `record/vitest.js` |

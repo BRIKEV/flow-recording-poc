@@ -16,7 +16,7 @@ What is what:
 - `test/`: its tests and test support. They know nothing about recording.
 - `flow.config.mjs`: the app's own curation rule (hide MikroORM's `pg_database` check), on top of the renderer's defaults.
 
-Flow recording itself lives in [`package/`](../../package/) and is imported as `flow-recording`. Every line this example adds for it is marked `← flow recording`.
+Flow recording itself is the repo root ([`src/`](../../src/)) and is imported as `flow-recording`. Every line this example adds for it is marked `← flow recording`.
 
 Why this stack: MikroORM 7 is ESM and loads `pg` (CJS), which was the riskiest case for OTel patching inside Vitest. The Slack client uses plain `fetch`, mocked with msw, which is the case that needs the `fetch` seam.
 

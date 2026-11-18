@@ -13,7 +13,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, join } from 'node:path';
-import { logsWanted, seenScopes } from './processor';
+import { logsWanted, seenScopes } from './processor.js';
 
 const BOUNDARIES = new Set([
   'pg', 'mysql', 'mysql2', 'mongodb', 'mongoose', 'tedious', 'oracledb', 'cassandra-driver', 'knex',
@@ -24,9 +24,9 @@ const BOUNDARIES = new Set([
 // Loggers whose instrumentation sends their logs through OTel
 const LOGGERS = new Set(['pino', 'winston', 'bunyan']);
 
-export function writeCoverage(dir: string, testFile: string | undefined) {
+export function writeCoverage(dir, testFile) {
   const require = createRequire(join(process.cwd(), 'noop.js'));
-  const packages = new Set<string>();
+  const packages = new Set();
   for (const file of Object.keys(require.cache)) {
     const m = file.match(/.*node_modules\/((?:@[^/]+\/)?[^/]+)\//);
     if (m) packages.add(m[1]);

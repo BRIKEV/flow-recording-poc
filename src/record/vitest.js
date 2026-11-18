@@ -15,14 +15,15 @@
 // Each piece lives in its own file next to this one.
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { context, ROOT_CONTEXT, trace, type Span } from '@opentelemetry/api';
+import { context, ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import { getFn, setFn } from '@vitest/runner';
-import { writeCoverage } from './coverage';
-import { resolvePackageEntriesByName } from './esm-entry';
-import { activate, exporter, nextOrder, resetLogs } from './processor';
-import { recording, type BodyWindow } from './recording';
-import { wrapFetch } from './seams/fetch';
-import { captureHttpBodies, clearBodies } from './seams/http-bodies';
+import { afterAll, afterEach, beforeEach } from 'vitest';
+import { writeCoverage } from './coverage.js';
+import { resolvePackageEntriesByName } from './esm-entry.js';
+import { activate, exporter, nextOrder, resetLogs } from './processor.js';
+import { recording } from './recording.js';
+import { wrapFetch } from './seams/fetch.js';
+import { captureHttpBodies, clearBodies } from './seams/http-bodies.js';
 
 activate();
 resolvePackageEntriesByName();
@@ -32,9 +33,10 @@ const tracer = trace.getTracer('flow-recording');
 const recordingsDir = join(process.cwd(), '.flow', 'recordings');
 const coverageDir = join(process.cwd(), '.flow', 'coverage');
 
-let testFile: string | undefined;
-let testSpan: Span | undefined;
-let body: BodyWindow;
+let testFile;
+let testSpan;
+/** @type {import('./recording.js').BodyWindow} */
+let body;
 
 beforeEach((ctx) => {
   testFile = ctx.task.file?.filepath;
@@ -49,7 +51,7 @@ beforeEach((ctx) => {
   // the context manager (AsyncLocalStorage) can be set for "from here on" instead of
   // inside a callback, which a beforeEach can't wrap the test in.
   testSpan = tracer.startSpan(ctx.task.name, {}, ROOT_CONTEXT);
-  const manager = (context as unknown as { _getContextManager(): { _asyncLocalStorage?: { enterWith(c: unknown): void } } })._getContextManager();
+  const manager = context._getContextManager();
   manager._asyncLocalStorage?.enterWith(trace.setSpan(ROOT_CONTEXT, testSpan));
 
   // When the test body starts and ends, on the processor's counter, to tell hook spans
@@ -70,7 +72,7 @@ beforeEach((ctx) => {
 
 afterEach((ctx) => {
   // For the story's header: describe path and result
-  const suites: string[] = [];
+  const suites = [];
   for (let s = ctx.task.suite; s && !('filepath' in s); s = s.suite) suites.unshift(s.name);
   testSpan?.setAttribute('flow.test.suite', suites.join(' › '));
   testSpan?.setAttribute('flow.test.state', ctx.task.result?.state ?? 'unknown');

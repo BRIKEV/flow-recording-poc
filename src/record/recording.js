@@ -6,18 +6,20 @@
 //                      did. The story hides hooks: they are setup, not behaviour.
 //   logs               the logs written while it was the active span
 //   flow.*.body        request/response bodies from the http seam
-import type { ReadableSpan } from '@opentelemetry/sdk-trace';
-import { endOrder, recordedLogs, startOrder, type RecordedLog } from './processor';
-import { bodyAttributes } from './seams/http-bodies';
+import { endOrder, recordedLogs, startOrder } from './processor.js';
+import { bodyAttributes } from './seams/http-bodies.js';
 
-// The test body ran between these two counter values (null: it never ran)
-export type BodyWindow = { from: number; to: number } | undefined;
+/**
+ * The test body ran between these two counter values (undefined: it never ran).
+ * @typedef {{ from: number, to: number } | undefined} BodyWindow
+ */
 
-export function recording(spans: ReadableSpan[], body: BodyWindow) {
+/** @param {import('@opentelemetry/sdk-trace').ReadableSpan[]} spans @param {BodyWindow} body */
+export function recording(spans, body) {
   return withLogs(withPhases(spans.map(toJson), body), body);
 }
 
-const toJson = (s: ReadableSpan) => ({
+const toJson = (s) => ({
   name: s.name,
   kind: s.kind,
   spanId: s.spanContext().spanId,
@@ -28,29 +30,26 @@ const toJson = (s: ReadableSpan) => ({
   startTime: s.startTime,
   endTime: s.endTime,
   attributes: {
-    ...(s.attributes as Record<string, unknown>),
+    ...s.attributes,
     ...bodyAttributes(s.spanContext().spanId),
   },
   scope: s.instrumentationScope.name,
 });
 
-type RecordedSpan = ReturnType<typeof toJson> & { logs?: unknown[] };
-
 // The test's own span: the one flow-recording opened, with no parent in the recording
-const rootOf = (spans: RecordedSpan[], byId: Map<string, RecordedSpan>) =>
-  spans.find((s) => s.scope === 'flow-recording' && !byId.has(s.parentSpanId!));
+const rootOf = (spans, byId) => spans.find((s) => s.scope === 'flow-recording' && !byId.has(s.parentSpanId));
 
-const inBody = (order: number, body: BodyWindow) => !!body && order >= body.from && order < body.to;
+const inBody = (order, body) => !!body && order >= body.from && order < body.to;
 
 // A span right under the test span is 'test' if it started while the body ran, else
 // 'hook'. Deeper spans inherit from their parent, so work the body started in the
 // background stays 'test'.
-function withPhases(spans: RecordedSpan[], body: BodyWindow): RecordedSpan[] {
+function withPhases(spans, body) {
   const byId = new Map(spans.map((s) => [s.spanId, s]));
   const root = rootOf(spans, byId);
-  const phaseOf = (s: RecordedSpan): string => {
+  const phaseOf = (s) => {
     if (s === root) return 'test';
-    const parent = byId.get(s.parentSpanId!);
+    const parent = byId.get(s.parentSpanId);
     if (parent && parent !== root) return phaseOf(parent);
     return inBody(s.order, body) ? 'test' : 'hook';
   };
@@ -59,12 +58,12 @@ function withPhases(spans: RecordedSpan[], body: BodyWindow): RecordedSpan[] {
 
 // Each log goes on the span it was written in, with that span's phase. A log written
 // straight under the test span is 'test' or 'hook' by when it was written, like a span.
-function withLogs(spans: RecordedSpan[], body: BodyWindow): RecordedSpan[] {
+function withLogs(spans, body) {
   const byId = new Map(spans.map((s) => [s.spanId, s]));
   const root = rootOf(spans, byId);
-  const logs = new Map<RecordedSpan, (RecordedLog & { phase: string })[]>();
+  const logs = new Map(); // span → its logs
   for (const log of recordedLogs()) {
-    const span = byId.get(log.spanId!) ?? root;
+    const span = byId.get(log.spanId) ?? root;
     if (!span) continue;
     const phase = span !== root ? String(span.attributes['flow.phase']) : inBody(log.order, body) ? 'test' : 'hook';
     logs.set(span, [...(logs.get(span) ?? []), { ...log, phase }]);

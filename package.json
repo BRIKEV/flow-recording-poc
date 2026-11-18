@@ -1,8 +1,39 @@
 {
-  "name": "flow-recording-poc",
+  "name": "flow-recording",
+  "version": "0.1.0",
   "private": true,
+  "description": "Render the OpenTelemetry trace of each backend test for PR review",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./vitest": "./src/record/vitest.js"
+  },
+  "bin": {
+    "flow-recording": "./src/render/cli.mjs"
+  },
+  "files": [
+    "src",
+    "HOW-IT-WORKS.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/sdk-trace": "^3.1.0",
+    "@opentelemetry/sdk-logs": "^3.1.0",
+    "vitest": "^4.1.0",
+    "@vitest/runner": "^4.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/sdk-logs": {
+      "optional": true
+    }
+  },
   "workspaces": [
-    "package",
     "examples/*"
   ]
 }

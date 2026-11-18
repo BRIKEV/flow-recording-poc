@@ -4,15 +4,13 @@
 // mocked request, and the call would be missing from the story. This wraps whatever fetch
 // is installed (msw's, once the test file has called listen()) with a client span that
 // has the url, method, status and both bodies. Production fetch is never touched.
-import { context, SpanKind, trace, type Tracer } from '@opentelemetry/api';
-import { isText } from './http-bodies';
+import { context, SpanKind, trace } from '@opentelemetry/api';
+import { isText } from './http-bodies.js';
 
-type Fetch = typeof fetch & { __flowWrapped?: boolean };
-
-export function wrapFetch(tracer: Tracer) {
-  const current = globalThis.fetch as Fetch;
+export function wrapFetch(tracer) {
+  const current = globalThis.fetch;
   if (current.__flowWrapped) return;
-  const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const wrapped = async (input, init) => {
     const request = new Request(input, init);
     const span = tracer.startSpan(`fetch ${request.method}`, {
       kind: SpanKind.CLIENT,
@@ -33,7 +31,7 @@ export function wrapFetch(tracer: Tracer) {
     } finally {
       span.end();
     }
-  }) as Fetch;
+  };
   wrapped.__flowWrapped = true;
   globalThis.fetch = wrapped;
 }
