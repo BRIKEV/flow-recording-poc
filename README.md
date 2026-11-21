@@ -82,6 +82,8 @@ If a library the app uses produced no spans, the CLI says so above the stories. 
 
 Plain JavaScript, no build step: what is in `src/` is what gets installed. The user-facing parts are marked `PUBLIC API` in the code.
 
+The package's own tests are in [`test/`](test/). `npm test` at the root runs them with Node's test runner, with no extra dependency and no Docker.
+
 ## Examples
 
 | Example | Stack | Flows it records |
