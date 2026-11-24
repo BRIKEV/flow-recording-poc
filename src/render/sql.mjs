@@ -25,8 +25,15 @@ const literal = (x) => {
   return new Verbatim(x);
 };
 const record = (cols, vals) => value(Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
-// Drop table aliases ("n0".id → id) and quotes
-const expr = (x) => x.replace(/"\w+"\./g, '').replace(/\b\w+\d\./g, '').replace(/"/g, '');
+// Drop table aliases ("n0".id, t.id → id) and identifier quotes, never inside a string
+// literal: '12:00:00.000Z' stays as it is. A number (0.5) is not an alias.
+const expr = (x) =>
+  x
+    .split(/('(?:[^']|'')*')/)
+    .map((part, i) => (i % 2 ? part : part.replace(/(?:"\w+"|\b[a-z_]\w*)\.(?=["a-z_*])/gi, '').replace(/"/g, '')))
+    .join('');
+// Aggregates in a select list, which say what the read is for: coalesce(sum(t.amount), 0) → sum(amount)
+const aggregates = (list) => [...list.matchAll(/\b(count|sum|avg|min|max)\s*\(([^()]*)\)/gi)].map((m) => `${m[1].toLowerCase()}(${expr(m[2]).trim()})`);
 
 export function sqlText(q) {
   let m;
@@ -44,9 +51,10 @@ export function sqlText(q) {
   if ((m = q.match(/^delete from\s+(\S+)(?:\s+as\s+\S+)?(?:\s+where\s+(.*?))?(\s+returning\b.*)?$/is))) {
     return `delete ${ident(m[1])}${m[2] ? ` where ${expr(m[2])}` : ''}`;
   }
-  if ((m = q.match(/^select\b.*?\bfrom\s+("?[\w.]+"?)(.*)$/is))) {
-    const where = m[2].match(/\bwhere\s+(.*?)(\s+(order by|group by|limit|offset|for update)\b.*)?$/is);
-    return `select ${ident(m[1])}${where ? ` where ${expr(where[1])}` : ''}`;
+  if ((m = q.match(/^select\b(.*?)\bfrom\s+("?[\w.]+"?)(.*)$/is))) {
+    const where = m[3].match(/\bwhere\s+(.*?)(\s+(order by|group by|limit|offset|for update)\b.*)?$/is);
+    const agg = aggregates(m[1]);
+    return `select ${ident(m[2])}${agg.length ? ` ${agg.join(', ')}` : ''}${where ? ` where ${expr(where[1])}` : ''}`;
   }
   return q;
 }

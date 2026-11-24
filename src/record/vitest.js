@@ -13,7 +13,7 @@
 //   afterEach   close the test span, write .flow/recordings/<test>.json
 //   afterAll    write .flow/coverage/<file>.json
 // Each piece lives in its own file next to this one.
-import { join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { context, ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import { getFn, setFn } from '@vitest/runner';
@@ -76,11 +76,29 @@ afterEach((ctx) => {
   for (let s = ctx.task.suite; s && !('filepath' in s); s = s.suite) suites.unshift(s.name);
   testSpan?.setAttribute('flow.test.suite', suites.join(' › '));
   testSpan?.setAttribute('flow.test.state', ctx.task.result?.state ?? 'unknown');
+  // Where the test is, to tell which tests a change touched. The line needs Vitest's
+  // `includeTaskLocation: true`; without it, only the file is recorded.
+  const filepath = ctx.task.file?.filepath;
+  if (filepath) testSpan?.setAttribute('flow.test.file', relative(process.cwd(), filepath));
+  if (ctx.task.location) testSpan?.setAttribute('flow.test.line', ctx.task.location.line);
   testSpan?.end();
 
   mkdirSync(recordingsDir, { recursive: true });
-  const file = ctx.task.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 80);
-  writeFileSync(join(recordingsDir, `${file}.json`), JSON.stringify(recording(exporter.getFinishedSpans(), body), null, 2));
+  writeFileSync(join(recordingsDir, `${recordingName(ctx.task)}.json`), JSON.stringify(recording(exporter.getFinishedSpans(), body), null, 2));
 });
+
+// <spec file>--<test name>, one per test. Names can still collide inside a file (it.each
+// cases that differ only in punctuation, the same name in two describes): later ones get
+// -2, -3…, in the file's test order, so the name is stable between runs.
+const slug = (s) => s.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+const taken = new Set();
+function recordingName(task) {
+  const spec = slug(basename(task.file?.filepath ?? 'test').replace(/\.[cm]?[jt]sx?$/, ''));
+  const base = `${spec}--${slug(task.name).slice(0, 80)}`;
+  let name = base;
+  for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+  taken.add(name);
+  return name;
+}
 
 afterAll(() => writeCoverage(coverageDir, testFile));

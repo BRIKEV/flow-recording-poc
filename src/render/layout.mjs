@@ -100,5 +100,7 @@ export function story(spans, config) {
   const state = root.attributes['flow.test.state'];
   const suite = root.attributes['flow.test.suite'];
   const header = `${state === 'pass' ? '✔' : state === 'fail' ? '✘' : '·'} ${suite ? `${suite} › ` : ''}${root.name}`;
+  // A test with nothing to show says so, instead of a bare header that reads like a bug
+  if (!folded.length) return `${header}\n  (no flow: the test made no call the instrumentation sees)`;
   return [header, ...folded.map((f) => (f.times > 1 ? `${f.text} ×${f.times}` : f.text))].join('\n');
 }
