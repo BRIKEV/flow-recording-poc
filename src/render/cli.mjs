@@ -5,6 +5,8 @@
 //   flow-recording <recording.json | recordings dir> [--config flow.config.mjs] [--since <git ref>]
 //   --since main  print only the tests added or changed since the merge-base with main
 //                 (see since.mjs); run it from the app's root, where the tests ran
+//   writes .flow/stories.txt (what it prints) and .flow/comment.md (the same, with each
+//   test's full trace collapsed under its story: a PR comment body, see markdown.mjs)
 //   flow.config.mjs  optional, in the app's root: curation rules, see curate.mjs
 //
 // For each recording (.flow/recordings/<test>.json, written by the runner integration) it
@@ -17,10 +19,11 @@
 //   layout.mjs    the story: actors, arrows, indentation
 //   raw.mjs       the uncurated tree          coverage.mjs   libraries that produced nothing
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { coverageWarning } from './coverage.mjs';
 import { story } from './layout.mjs';
+import { comment } from './markdown.mjs';
 import { raw } from './raw.mjs';
 import { changedLines, touched } from './since.mjs';
 import { tree } from './spans.mjs';
@@ -75,7 +78,8 @@ for (const file of files) {
   const { root } = tree(spans);
   if (!root) continue; // not a test recording
   const base = file.replace(/\.json$/, '');
-  writeFileSync(`${base}.raw.txt`, raw(spans) + '\n');
+  const trace = raw(spans);
+  writeFileSync(`${base}.raw.txt`, trace + '\n');
   const text = story(spans, config);
   writeFileSync(`${base}.story.txt`, text + '\n');
   const test = { file: root.attributes['flow.test.file'], line: root.attributes['flow.test.line'] };
@@ -84,7 +88,7 @@ for (const file of files) {
     if (!t.touched) continue;
     if (!t.exact) fileLevel++;
   }
-  stories.push({ text, file: test.file ?? '', line: test.line ?? 0, order: stories.length });
+  stories.push({ text, raw: trace, name: basename(base), file: test.file ?? '', line: test.line ?? 0, order: stories.length });
 }
 // In the order they are written: by spec file, then line (it.each cases keep their run order)
 stories.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.order - b.order);
@@ -100,5 +104,8 @@ if (changes) {
     print(`⚠ ${fileLevel} of them picked by file, not by test: the runner recorded no test lines (Vitest: includeTaskLocation: true)`);
   }
 }
+const intro = [...out];
 for (const { text } of stories) print(text);
 writeFileSync(join(recordingsDir, '..', 'stories.txt'), out.join('\n\n') + '\n');
+// The same, as a PR comment body: each story with its full trace collapsed under it
+writeFileSync(join(recordingsDir, '..', 'comment.md'), comment({ intro, stories }) + '\n');

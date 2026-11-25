@@ -53,7 +53,7 @@ npx flow-recording .flow/recordings  # writes <test>.story.txt and prints the st
 npx flow-recording .flow/recordings --since main  # prints only the tests added or changed since main
 ```
 
-`--since <ref>` keeps the tests a branch added or modified: a line changed since the merge-base with `<ref>` (committed or not, plus untracked files) falls inside the test's `it(…)` call. Changes outside every test (a helper, a hook) select none. It needs each test's line: set `includeTaskLocation: true` in the Vitest config; without it, any change to a spec file selects all its tests, and the CLI says so. What it prints is also written to `.flow/stories.txt`.
+`--since <ref>` keeps the tests a branch added or modified: a line changed since the merge-base with `<ref>` (committed or not, plus untracked files) falls inside the test's `it(…)` call. Changes outside every test (a helper, a hook) select none. It needs each test's line: set `includeTaskLocation: true` in the Vitest config; without it, any change to a spec file selects all its tests, and the CLI says so. What it prints is also written to `.flow/stories.txt`, and to `.flow/comment.md` as a PR comment body: each story with its full trace in a collapsed `<details>`, kept under GitHub's comment limit.
 
 Add `.flow/` to `.gitignore`. There is no env var: loading `flow-recording/vitest` is what turns recording on.
 
