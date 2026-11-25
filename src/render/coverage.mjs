@@ -17,8 +17,11 @@ export function coverageWarning(coverageDir) {
   }
   for (const pkg of seen) gaps.delete(pkg);
   return [...gaps]
+    // A logger can stay quiet for two reasons we can't tell apart from here: its
+    // instrumentation didn't patch it, or the app silences it in tests (a `silent` level,
+    // its framework logger turned off). Name both, so the fix is found in the right place.
     .map(([pkg, c]) => c.signal === 'logs'
-      ? `⚠ ${pkg} was used but ${c.instrumentation} sent no logs: its logs are missing from these stories`
+      ? `⚠ ${pkg} was used but ${c.instrumentation} sent no logs: its logs are missing from these stories. Either it is not instrumented, or the app silences it in tests (a silent level, its framework logger turned off)`
       : `⚠ ${pkg} was used but ${c.instrumentation} produced no spans: its calls are missing from these stories`)
     .join('\n');
 }
